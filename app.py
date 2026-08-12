@@ -274,7 +274,7 @@ with tab1:
                     }
                     return color_map.get(val, "")
 
-                styled_df = priority_df.style.applymap(_highlight_tier, subset=["风险等级"])
+                styled_df = priority_df.style.map(_highlight_tier, subset=["风险等级"])
                 st.dataframe(
                     styled_df,
                     use_container_width=True,
