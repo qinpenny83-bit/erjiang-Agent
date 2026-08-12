@@ -303,8 +303,8 @@ def _call_llm(prompt: str, max_retry: int = 2) -> str:
         try:
             response = client.chat.completions.create(
                 model=MODEL_NAME,
-                temperature=0.3,
-                max_tokens=1500,
+                temperature=0.1,
+                max_tokens=4000,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt}
@@ -717,7 +717,25 @@ def generate_pdf_report(student: dict, output_dir: str) -> str:
         textColor=HexColor('#999999'), alignment=1
     )))
 
-    doc.build(elements)
+    try:
+        doc.build(elements)
+    except Exception as e:
+        print(f"[PDF] doc.build 失败: {e}")
+        # 尝试逐元素构建，定位问题元素
+        for i, elem in enumerate(elements):
+            try:
+                temp_doc = SimpleDocTemplate(filepath, pagesize=A4,
+                                             leftMargin=2*cm, rightMargin=2*cm,
+                                             topMargin=2*cm, bottomMargin=2*cm)
+                temp_doc.build([elem])
+            except Exception as ee:
+                print(f"[PDF] 元素[{i}] 失败: {ee}")
+                elements[i] = Paragraph(f"[渲染失败: {type(elem).__name__}]", body_style)
+        doc = SimpleDocTemplate(filepath, pagesize=A4,
+                                leftMargin=2*cm, rightMargin=2*cm,
+                                topMargin=2*cm, bottomMargin=2*cm)
+        doc.build(elements)
+        print(f"[PDF] 已跳过问题元素，PDF仍可生成")
     return filepath
 
 

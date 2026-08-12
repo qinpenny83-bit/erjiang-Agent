@@ -1007,12 +1007,15 @@ with tab3:
                     pdf_filename = f"学情报告_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
                     if st.button("📕 生成PDF报告", key="lec_export_single_pdf2", use_container_width=True):
                         with st.spinner("正在生成PDF..."):
-                            pdf_path = generate_pdf_report(single_report, OUTPUT_DIR)
-                            with open(pdf_path, "rb") as f:
-                                pdf_bytes = f.read()
-                            st.session_state["lec_single_pdf_bytes"] = pdf_bytes
-                            st.session_state["lec_single_pdf_filename"] = pdf_filename
-                            st.rerun()
+                            try:
+                                pdf_path = generate_pdf_report(single_report, OUTPUT_DIR)
+                                with open(pdf_path, "rb") as f:
+                                    pdf_bytes = f.read()
+                                st.session_state["lec_single_pdf_bytes"] = pdf_bytes
+                                st.session_state["lec_single_pdf_filename"] = pdf_filename
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"PDF生成失败: {e}")
                     if st.session_state.get("lec_single_pdf_bytes") and st.session_state.get("lec_single_pdf_filename") == pdf_filename:
                         st.download_button(
                             "📕 点击下载PDF",
@@ -1049,8 +1052,12 @@ with tab3:
                     zip_path = os.path.join(OUTPUT_DIR, zip_filename)
                     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
                         for i, r in enumerate(reports):
-                            pdf_path = generate_pdf_report(r, OUTPUT_DIR)
-                            zf.write(pdf_path, os.path.basename(pdf_path))
+                            try:
+                                pdf_path = generate_pdf_report(r, OUTPUT_DIR)
+                                zf.write(pdf_path, os.path.basename(pdf_path))
+                            except Exception as e:
+                                st.warning(f"学员 {r.get('学生姓名', '未知')} PDF生成失败: {e}")
+                                continue
                             progress_bar.progress(0.5 + 0.5 * (i + 1) / len(reports))
                     st.session_state["lec_zip_path"] = zip_path
                     st.session_state["lec_zip_filename"] = zip_filename
