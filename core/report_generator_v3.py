@@ -61,6 +61,8 @@ def _register_chinese_font():
 
     # 设置字体族映射：告诉 reportlab MSYHBD 是 MSYH 的粗体
     # 这是修复 "Can't map determine family/bold/italic for mshbd" 的关键
+    # reportlab 在渲染 fontName='MSYHBD' 时会查找名为 "MSYHBD" 的字体族，
+    # 必须同时注册 MSYH 和 MSYHBD 两个族
     if _has_normal or _has_bold:
         normal = "MSYH" if _has_normal else "MSYHBD"
         bold = "MSYHBD" if _has_bold else "MSYH"
@@ -68,12 +70,25 @@ def _register_chinese_font():
             pdfmetrics.registerFontFamily("MSYH", normal=normal, bold=bold)
         except:
             pass
+        # 关键：单独注册 MSYHBD 族，使 fontName='MSYHBD' 的 ParagraphStyle 也能正常渲染
+        if _has_bold:
+            try:
+                pdfmetrics.registerFontFamily("MSYHBD", normal="MSYHBD", bold="MSYHBD")
+            except:
+                pass
+        elif _has_normal:
+            # MSYHBD 字体未找到，用 MSYH 替代
+            try:
+                pdfmetrics.registerFontFamily("MSYHBD", normal="MSYH", bold="MSYH")
+            except:
+                pass
 
     # 最终兜底：如果字体都没注册成功，使用 Helvetica 避免崩溃
     if not _has_normal and not _has_bold:
         print("[PDF] 警告：未找到任何中文字体，PDF 中文将无法显示")
         try:
             pdfmetrics.registerFontFamily("MSYH", normal="Helvetica", bold="Helvetica-Bold")
+            pdfmetrics.registerFontFamily("MSYHBD", normal="Helvetica-Bold", bold="Helvetica-Bold")
         except:
             pass
 
