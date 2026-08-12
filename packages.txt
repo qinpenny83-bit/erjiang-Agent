@@ -1,3 +1,1 @@
-# Streamlit Cloud 系统依赖
-# 中文字体（PDF 导出需要）
 fonts-noto-cjk
