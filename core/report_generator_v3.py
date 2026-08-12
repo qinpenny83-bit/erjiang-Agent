@@ -20,41 +20,80 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 # 注册中文字体（Windows + Linux 双环境兼容，统一使用 NotoCJK 一个字体）
+# reportlab 的 TTFont 不支持 .ttc（TrueType Collection），仅支持 .ttf
+# 使用 fontTools 从 .ttc 中提取单个 .ttf 到临时文件
 _FONT_REGISTERED = False
 _FONT_ERROR = None
+_TEMP_TTF_FILES = []  # 记录临时 .ttf 文件，进程退出时清理
+
+def _extract_ttf_from_ttc(ttc_path: str, index: int = 0) -> str:
+    """从 .ttc 文件中提取单个 .ttf 字体到临时文件"""
+    try:
+        from fontTools.ttLib import TTFont as FTTFont
+        import tempfile
+        font = FTTFont(ttc_path, fontNumber=index)
+        tmp = tempfile.NamedTemporaryFile(suffix='.ttf', delete=False, prefix='notocjk_')
+        font.save(tmp.name)
+        _TEMP_TTF_FILES.append(tmp.name)
+        return tmp.name
+    except Exception:
+        return None
+
 def _register_chinese_font():
     global _FONT_REGISTERED, _FONT_ERROR
     if _FONT_REGISTERED:
         return
 
     # Linux 优先（Streamlit Cloud 运行环境），Windows 其次
+    # 优先使用 .ttf 文件，.ttc 文件通过 fontTools 提取后使用
     font_paths = [
-        # === Linux (Streamlit Cloud / Docker) ===
-        # Noto Sans CJK (fonts-noto-cjk，packages.txt 安装)
+        # === Linux .ttf 优先 ===
+        # DroidSansFallback（Debian 默认，fonts-droid-fallback 提供 .ttf）
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+        # === Linux .ttc（通过 fontTools 提取） ===
+        # WenQuanYi Micro Hei
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        # Noto Sans CJK (fonts-noto-cjk)
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        # WenQuanYi Micro Hei（轻量中文字体）
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-        # DroidSansFallback（Debian 默认中文字体，无需额外安装）
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-        # === Windows ===
+        # === Windows .ttf ===
+        r"C:\Windows\Fonts\simhei.ttf",
+        # === Windows .ttc（通过 fontTools 提取） ===
         r"C:\Windows\Fonts\msyh.ttc",
         r"C:\Windows\Fonts\msyhbd.ttc",
         r"C:\Windows\Fonts\simsun.ttc",
-        r"C:\Windows\Fonts\simhei.ttf",
     ]
 
     _registered = False
     _used_path = ""
     _last_error = ""
     for path in font_paths:
+        if not os.path.exists(path):
+            continue
         try:
-            if os.path.exists(path):
+            if path.lower().endswith('.ttc'):
+                # .ttc 文件：通过 fontTools 提取为临时 .ttf
+                ttf_path = _extract_ttf_from_ttc(path)
+                if ttf_path and os.path.exists(ttf_path):
+                    pdfmetrics.registerFont(TTFont("NotoCJK", ttf_path))
+                    _registered = True
+                    _used_path = f"{path} -> {ttf_path}"
+                    print(f"[FONT] 使用字体: {path}")
+                    print(f"[FONT] 字体格式: .ttc（已提取为 .ttf）")
+                    print(f"[FONT] 临时文件: {ttf_path}")
+                    print(f"[FONT] 注册成功: True")
+                    break
+                else:
+                    _last_error = f"fontTools 提取 .ttc 失败: {path}"
+                    print(f"[FONT] {_last_error}")
+            else:
+                # .ttf 文件：直接注册
                 pdfmetrics.registerFont(TTFont("NotoCJK", path))
                 _registered = True
                 _used_path = path
-                print(f"[FONT] 当前使用字体路径: {path}")
-                print(f"[FONT] NotoCJK 是否注册成功: True")
+                print(f"[FONT] 使用字体: {path}")
+                print(f"[FONT] 字体格式: .ttf（直接注册）")
+                print(f"[FONT] 注册成功: True")
                 break
         except Exception as e:
             _last_error = str(e)
@@ -62,19 +101,17 @@ def _register_chinese_font():
 
     if not _registered:
         _FONT_ERROR = _last_error or "未找到任何中文字体文件"
-        print(f"[FONT] NotoCJK 是否注册成功: False")
+        print(f"[FONT] 注册成功: False")
         print(f"[FONT] 注册失败原因: {_FONT_ERROR}")
-        # 不创建 PDF 字体族，让后续 PDF 生成时显式失败
+    else:
+        _FONT_ERROR = None
 
     # 打印最终注册字体列表
     registered_names = pdfmetrics.getRegisteredFontNames()
     print(f"[FONT] 已注册字体列表: {registered_names}")
-    has_notocjk = "NotoCJK" in registered_names
-    if not has_notocjk:
+    if "NotoCJK" not in registered_names:
         _FONT_ERROR = _FONT_ERROR or "NotoCJK 未在注册字体列表中"
         print(f"[FONT] 错误: NotoCJK 未在注册字体列表中")
-    else:
-        _FONT_ERROR = None
 
     _FONT_REGISTERED = True
 
