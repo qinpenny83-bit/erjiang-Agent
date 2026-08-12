@@ -1,0 +1,8 @@
+Collecting plotly
+  Downloading plotly-6.9.0-py3-none-any.whl.metadata (9.0 kB)
+Requirement already satisfied: narwhals>=1.15.1 in c:\users\qinpei\appdata\roaming\trae solo cn\modulardata\ai-agent\vm\tools\python\lib\site-packages (from plotly) (2.24.0)
+Requirement already satisfied: packaging in c:\users\qinpei\appdata\roaming\trae solo cn\modulardata\ai-agent\vm\tools\python\lib\site-packages (from plotly) (26.1)
+Downloading plotly-6.9.0-py3-none-any.whl (9.9 MB)
+   ---------------------------------------- 9.9/9.9 MB 3.6 MB/s  0:00:02
+Installing collected packages: plotly
+Successfully installed plotly-6.9.0

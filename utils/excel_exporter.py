@@ -9,8 +9,44 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def export_analysis_to_excel(analysis_result: dict, output_path: str):
-    """导出学情分析结果为Excel"""
-    df = pd.DataFrame(analysis_result["students"])
+    """导出学情分析结果为Excel（支持动态字段）"""
+    # 提取所有可能的列
+    all_keys = set()
+    for student in analysis_result["students"]:
+        all_keys.update(student.keys())
+
+    # 排除不需要导出的列（内部字段和复杂类型）
+    exclude_keys = {"风险详情", "raw_data", "classification", "_profile", "评分依据", "风险触发", "缺失维度", "家长信号", "recognition", "_profile"}
+    export_keys = [k for k in all_keys if k not in exclude_keys]
+
+    # 构建DataFrame，处理复杂类型
+    rows = []
+    for student in analysis_result["students"]:
+        row = {}
+        for k in export_keys:
+            val = student.get(k, "")
+            # 将列表/字典转为可读字符串
+            if isinstance(val, list):
+                if val and isinstance(val[0], dict):
+                    # 各维度风险 → 浓缩为文本
+                    parts = []
+                    for d in val:
+                        dim_name = d.get("维度", "")
+                        dim_level = d.get("风险等级", "")
+                        dim_evidence = d.get("判断依据", "")
+                        parts.append(f"{dim_name}({dim_level}):{dim_evidence}")
+                    row[k] = " | ".join(parts)
+                else:
+                    # 普通列表 → 分号连接
+                    row[k] = "；".join(str(v) for v in val)
+            elif isinstance(val, dict):
+                row[k] = str(val)
+            else:
+                row[k] = val
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="学生分层列表", index=False)
 
@@ -20,6 +56,14 @@ def export_analysis_to_excel(analysis_result: dict, output_path: str):
             for tier, count in analysis_result["tier_stats"].items()
         ])
         stats_df.to_excel(writer, sheet_name="分层统计", index=False)
+
+        # 写入预警数据（如果有）
+        if "warnings" in analysis_result:
+            warnings_df = pd.DataFrame([
+                {"预警类型": k, "人数": v}
+                for k, v in analysis_result["warnings"].items()
+            ])
+            warnings_df.to_excel(writer, sheet_name="预警统计", index=False)
 
     return output_path
 
@@ -46,8 +90,8 @@ def export_reports_to_excel(reports: list[dict], output_path: str):
     )
 
     for report in reports:
-        name = report["学生姓名"]
-        tier = report.get("分层", "B")
+        name = report.get("学生姓名", report.get("name", "未知"))
+        tier = report.get("分层", report.get("分类", "B"))
         # sheet名称限制31字符
         sheet_name = name[:31] if len(name) > 31 else name
         ws = wb.create_sheet(title=sheet_name)
@@ -71,7 +115,8 @@ def export_reports_to_excel(reports: list[dict], output_path: str):
         ws["A5"] = "学情报告"
         ws["A5"].font = Font(bold=True)
         ws.merge_cells("A6:B30")
-        ws["A6"] = report["学情报告"]
+        report_text = report.get("正式报告", report.get("完整输出", report.get("学情报告", report.get("report", ""))))
+        ws["A6"] = report_text
         ws["A6"].alignment = Alignment(wrap_text=True, vertical="top")
         ws.row_dimensions[6].height = 300
 
