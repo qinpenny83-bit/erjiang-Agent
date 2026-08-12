@@ -28,6 +28,7 @@ def _register_chinese_font():
 
     _has_normal = False
     _has_bold = False
+    _normal_font_path = None
 
     font_paths = [
         # === Windows ===
@@ -54,34 +55,31 @@ def _register_chinese_font():
                 pdfmetrics.registerFont(TTFont(name, path))
                 if name == "MSYH":
                     _has_normal = True
+                    _normal_font_path = path
                 elif name == "MSYHBD":
                     _has_bold = True
         except:
             pass
 
-    # 设置字体族映射：告诉 reportlab MSYHBD 是 MSYH 的粗体
-    # 这是修复 "Can't map determine family/bold/italic for mshbd" 的关键
-    # reportlab 在渲染 fontName='MSYHBD' 时会查找名为 "MSYHBD" 的字体族，
-    # 必须同时注册 MSYH 和 MSYHBD 两个族
+    # 关键修复：如果 MSYHBD 字体文件未找到，用 MSYH 的字体文件注册一个名为 MSYHBD 的 TTFont
+    # 这样 ParagraphStyle(fontName='MSYHBD') 才能通过 pdfmetrics.getFont("MSYHBD") 找到字体
+    if _has_normal and not _has_bold and _normal_font_path:
+        try:
+            pdfmetrics.registerFont(TTFont("MSYHBD", _normal_font_path))
+            _has_bold = True
+            print(f"[PDF] MSYHBD 未找到独立字体文件，使用 MSYH 替代: {_normal_font_path}")
+        except Exception as e:
+            print(f"[PDF] MSYHBD 回退注册失败: {e}")
+
+    # 设置字体族映射
     if _has_normal or _has_bold:
         normal = "MSYH" if _has_normal else "MSYHBD"
         bold = "MSYHBD" if _has_bold else "MSYH"
         try:
             pdfmetrics.registerFontFamily("MSYH", normal=normal, bold=bold)
+            pdfmetrics.registerFontFamily("MSYHBD", normal=bold, bold=bold)
         except:
             pass
-        # 关键：单独注册 MSYHBD 族，使 fontName='MSYHBD' 的 ParagraphStyle 也能正常渲染
-        if _has_bold:
-            try:
-                pdfmetrics.registerFontFamily("MSYHBD", normal="MSYHBD", bold="MSYHBD")
-            except:
-                pass
-        elif _has_normal:
-            # MSYHBD 字体未找到，用 MSYH 替代
-            try:
-                pdfmetrics.registerFontFamily("MSYHBD", normal="MSYH", bold="MSYH")
-            except:
-                pass
 
     # 最终兜底：如果字体都没注册成功，使用 Helvetica 避免崩溃
     if not _has_normal and not _has_bold:
