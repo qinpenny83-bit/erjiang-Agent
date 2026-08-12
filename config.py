@@ -4,10 +4,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _get_config(key: str, default: str = "") -> str:
+    """读取配置，兼容本地 .env 和 Streamlit Cloud st.secrets"""
+    val = os.getenv(key)
+    if val:
+        return val
+    try:
+        import streamlit as st
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
 # LLM 配置
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
+OPENAI_API_KEY = _get_config("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = _get_config("OPENAI_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = _get_config("MODEL_NAME", "gpt-4o-mini")
 TEMPERATURE = 0.7
 MAX_TOKENS = 4000
 
