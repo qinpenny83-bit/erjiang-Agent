@@ -19,10 +19,11 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# 注册中文字体（Windows + Linux 双环境兼容，统一使用 MSYH 一个字体）
+# 注册中文字体（Windows + Linux 双环境兼容，统一使用 NotoCJK 一个字体）
 _FONT_REGISTERED = False
+_FONT_ERROR = None
 def _register_chinese_font():
-    global _FONT_REGISTERED
+    global _FONT_REGISTERED, _FONT_ERROR
     if _FONT_REGISTERED:
         return
 
@@ -45,31 +46,35 @@ def _register_chinese_font():
 
     _registered = False
     _used_path = ""
+    _last_error = ""
     for path in font_paths:
         try:
             if os.path.exists(path):
-                pdfmetrics.registerFont(TTFont("MSYH", path))
+                pdfmetrics.registerFont(TTFont("NotoCJK", path))
                 _registered = True
                 _used_path = path
                 print(f"[FONT] 当前使用字体路径: {path}")
-                print(f"[FONT] MSYH 是否注册成功: True")
+                print(f"[FONT] NotoCJK 是否注册成功: True")
                 break
         except Exception as e:
+            _last_error = str(e)
             print(f"[FONT] 尝试注册 {path} 失败: {e}")
 
-    if _registered:
-        try:
-            pdfmetrics.registerFontFamily("MSYH", normal="MSYH", bold="MSYH")
-            print(f"[FONT] 已注册字体列表: {pdfmetrics.getRegisteredFontNames()}")
-        except:
-            pass
+    if not _registered:
+        _FONT_ERROR = _last_error or "未找到任何中文字体文件"
+        print(f"[FONT] NotoCJK 是否注册成功: False")
+        print(f"[FONT] 注册失败原因: {_FONT_ERROR}")
+        # 不创建 PDF 字体族，让后续 PDF 生成时显式失败
+
+    # 打印最终注册字体列表
+    registered_names = pdfmetrics.getRegisteredFontNames()
+    print(f"[FONT] 已注册字体列表: {registered_names}")
+    has_notocjk = "NotoCJK" in registered_names
+    if not has_notocjk:
+        _FONT_ERROR = _FONT_ERROR or "NotoCJK 未在注册字体列表中"
+        print(f"[FONT] 错误: NotoCJK 未在注册字体列表中")
     else:
-        print("[FONT] MSYH 是否注册成功: False")
-        print("[FONT] 警告：未找到任何中文字体，PDF 中文将无法显示")
-        try:
-            pdfmetrics.registerFontFamily("MSYH", normal="Helvetica", bold="Helvetica-Bold")
-        except:
-            pass
+        _FONT_ERROR = None
 
     _FONT_REGISTERED = True
 
@@ -534,6 +539,11 @@ def _markdown_to_reportlab(text: str) -> str:
 
 def generate_pdf_report(student: dict, output_dir: str) -> str:
     """为单个学生生成正式PDF报告"""
+    # 确保字体已注册
+    _register_chinese_font()
+    if _FONT_ERROR:
+        raise RuntimeError(f"中文字体注册失败，无法生成PDF: {_FONT_ERROR}")
+
     safe_name = re.sub(r'[\\/:*?"<>|]', '', student["学生姓名"])
     filename = f"学情报告_{safe_name}.pdf"
     filepath = os.path.join(output_dir, filename)
@@ -547,35 +557,35 @@ def generate_pdf_report(student: dict, output_dir: str) -> str:
     # 自定义样式（使用中文字体）
     title_style = ParagraphStyle(
         'CustomTitle', parent=styles['Title'],
-        fontName='MSYH', fontSize=18,
+        fontName='NotoCJK', fontSize=18,
         textColor=HexColor('#1A56DB'), spaceAfter=6
     )
     section_style = ParagraphStyle(
         'Section', parent=styles['Normal'],
-        fontName='MSYH', fontSize=12,
+        fontName='NotoCJK', fontSize=12,
         textColor=HexColor('#1A56DB'), spaceBefore=10, spaceAfter=4
     )
     body_style = ParagraphStyle(
         'Body', parent=styles['Normal'],
-        fontName='MSYH', fontSize=10.5,
+        fontName='NotoCJK', fontSize=10.5,
         textColor=HexColor('#333333'), spaceAfter=4,
         leading=18
     )
     body_bold_style = ParagraphStyle(
         'BodyBold', parent=styles['Normal'],
-        fontName='MSYH', fontSize=10.5,
+        fontName='NotoCJK', fontSize=10.5,
         textColor=HexColor('#333333'), spaceAfter=4,
         leading=18
     )
     list_style = ParagraphStyle(
         'List', parent=styles['Normal'],
-        fontName='MSYH', fontSize=10.5,
+        fontName='NotoCJK', fontSize=10.5,
         textColor=HexColor('#333333'), spaceAfter=3,
         leading=18, leftIndent=12
     )
     quote_style = ParagraphStyle(
         'Quote', parent=styles['Normal'],
-        fontName='MSYH', fontSize=10.5,
+        fontName='NotoCJK', fontSize=10.5,
         textColor=HexColor('#555555'), spaceAfter=6,
         leading=18, leftIndent=6,
         borderColor=HexColor('#1A56DB'), borderWidth=0,
@@ -692,7 +702,7 @@ def generate_pdf_report(student: dict, output_dir: str) -> str:
     elements.append(Spacer(1, 20))
     elements.append(Paragraph("—— 高途教育 ——", ParagraphStyle(
         'Footer', parent=styles['Normal'],
-        fontName='MSYH', fontSize=9,
+        fontName='NotoCJK', fontSize=9,
         textColor=HexColor('#999999'), alignment=1
     )))
 
@@ -731,23 +741,23 @@ def generate_category_pdf_report(category: str, students: list, output_dir: str)
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         'Title', parent=styles['Title'],
-        fontName='MSYH', fontSize=16,
+        fontName='NotoCJK', fontSize=16,
         textColor=HexColor('#1A56DB'), spaceAfter=6
     )
     name_style = ParagraphStyle(
         'Name', parent=styles['Normal'],
-        fontName='MSYH', fontSize=12,
+        fontName='NotoCJK', fontSize=12,
         textColor=HexColor('#333333'), spaceBefore=12, spaceAfter=4
     )
     body_style = ParagraphStyle(
         'Body', parent=styles['Normal'],
-        fontName='MSYH', fontSize=10,
+        fontName='NotoCJK', fontSize=10,
         textColor=HexColor('#333333'), spaceAfter=3,
         leading=16
     )
     footer_style = ParagraphStyle(
         'Footer', parent=styles['Normal'],
-        fontName='MSYH', fontSize=9,
+        fontName='NotoCJK', fontSize=9,
         textColor=HexColor('#999999'), alignment=1
     )
 
