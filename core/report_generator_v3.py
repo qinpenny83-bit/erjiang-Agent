@@ -25,6 +25,10 @@ def _register_chinese_font():
     global _FONT_REGISTERED
     if _FONT_REGISTERED:
         return
+
+    _has_normal = False
+    _has_bold = False
+
     font_paths = [
         # === Windows ===
         (r"C:\Windows\Fonts\msyh.ttc", "MSYH"),
@@ -32,7 +36,7 @@ def _register_chinese_font():
         (r"C:\Windows\Fonts\simsun.ttc", "SimSun"),
         (r"C:\Windows\Fonts\simhei.ttf", "SimHei"),
         # === Linux (Streamlit Cloud / Docker) ===
-        # Noto Sans CJK (Debian/Ubuntu 安装 fonts-noto-cjk 后)
+        # Noto Sans CJK (fonts-noto-cjk)
         ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "MSYH"),
         ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "MSYHBD"),
         ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "MSYH"),
@@ -48,8 +52,31 @@ def _register_chinese_font():
         try:
             if os.path.exists(path):
                 pdfmetrics.registerFont(TTFont(name, path))
+                if name == "MSYH":
+                    _has_normal = True
+                elif name == "MSYHBD":
+                    _has_bold = True
         except:
             pass
+
+    # 设置字体族映射：告诉 reportlab MSYHBD 是 MSYH 的粗体
+    # 这是修复 "Can't map determine family/bold/italic for mshbd" 的关键
+    if _has_normal or _has_bold:
+        normal = "MSYH" if _has_normal else "MSYHBD"
+        bold = "MSYHBD" if _has_bold else "MSYH"
+        try:
+            pdfmetrics.registerFontFamily("MSYH", normal=normal, bold=bold)
+        except:
+            pass
+
+    # 最终兜底：如果字体都没注册成功，使用 Helvetica 避免崩溃
+    if not _has_normal and not _has_bold:
+        print("[PDF] 警告：未找到任何中文字体，PDF 中文将无法显示")
+        try:
+            pdfmetrics.registerFontFamily("MSYH", normal="Helvetica", bold="Helvetica-Bold")
+        except:
+            pass
+
     _FONT_REGISTERED = True
 
 _register_chinese_font()
