@@ -1,4 +1,4 @@
-"""学情报告生成器V3 — 精简分析 + 正式报告 + Word文件生成"""
+﻿"""学情报告生成器V3 — 精简分析 + 正式报告 + Word文件生成"""
 import os
 import sys
 import re
@@ -19,74 +19,49 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# 注册中文字体（Windows + Linux 双环境兼容）
+# 注册中文字体（Windows + Linux 双环境兼容，统一使用 MSYH 一个字体）
 _FONT_REGISTERED = False
 def _register_chinese_font():
     global _FONT_REGISTERED
     if _FONT_REGISTERED:
         return
 
-    _has_normal = False
-    _has_bold = False
-    _normal_font_path = None
-
     font_paths = [
         # === Windows ===
-        (r"C:\Windows\Fonts\msyh.ttc", "MSYH"),
-        (r"C:\Windows\Fonts\msyhbd.ttc", "MSYHBD"),
-        (r"C:\Windows\Fonts\simsun.ttc", "SimSun"),
-        (r"C:\Windows\Fonts\simhei.ttf", "SimHei"),
+        r"C:\Windows\Fonts\msyh.ttc",
+        r"C:\Windows\Fonts\msyhbd.ttc",
+        r"C:\Windows\Fonts\simsun.ttc",
+        r"C:\Windows\Fonts\simhei.ttf",
         # === Linux (Streamlit Cloud / Docker) ===
         # Noto Sans CJK (fonts-noto-cjk)
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "MSYH"),
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "MSYHBD"),
-        ("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc", "MSYH"),
-        ("/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc", "MSYHBD"),
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
         # DroidSansFallback（Debian 默认中文字体，无需额外安装）
-        ("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", "MSYH"),
-        ("/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf", "MSYHBD"),
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
         # WenQuanYi Micro Hei（轻量中文字体）
-        ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", "MSYH"),
-        ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", "MSYHBD"),
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
     ]
-    for path, name in font_paths:
+
+    _registered = False
+    for path in font_paths:
         try:
             if os.path.exists(path):
-                pdfmetrics.registerFont(TTFont(name, path))
-                if name == "MSYH":
-                    _has_normal = True
-                    _normal_font_path = path
-                elif name == "MSYHBD":
-                    _has_bold = True
+                pdfmetrics.registerFont(TTFont("MSYH", path))
+                _registered = True
+                print(f"[PDF] 字体注册成功: {path} -> MSYH")
+                break
         except:
             pass
 
-    # 关键修复：如果 MSYHBD 字体文件未找到，用 MSYH 的字体文件注册一个名为 MSYHBD 的 TTFont
-    # 这样 ParagraphStyle(fontName='MSYHBD') 才能通过 pdfmetrics.getFont("MSYHBD") 找到字体
-    if _has_normal and not _has_bold and _normal_font_path:
+    if _registered:
         try:
-            pdfmetrics.registerFont(TTFont("MSYHBD", _normal_font_path))
-            _has_bold = True
-            print(f"[PDF] MSYHBD 未找到独立字体文件，使用 MSYH 替代: {_normal_font_path}")
-        except Exception as e:
-            print(f"[PDF] MSYHBD 回退注册失败: {e}")
-
-    # 设置字体族映射
-    if _has_normal or _has_bold:
-        normal = "MSYH" if _has_normal else "MSYHBD"
-        bold = "MSYHBD" if _has_bold else "MSYH"
-        try:
-            pdfmetrics.registerFontFamily("MSYH", normal=normal, bold=bold)
-            pdfmetrics.registerFontFamily("MSYHBD", normal=bold, bold=bold)
+            pdfmetrics.registerFontFamily("MSYH", normal="MSYH", bold="MSYH")
         except:
             pass
-
-    # 最终兜底：如果字体都没注册成功，使用 Helvetica 避免崩溃
-    if not _has_normal and not _has_bold:
+    else:
         print("[PDF] 警告：未找到任何中文字体，PDF 中文将无法显示")
         try:
             pdfmetrics.registerFontFamily("MSYH", normal="Helvetica", bold="Helvetica-Bold")
-            pdfmetrics.registerFontFamily("MSYHBD", normal="Helvetica-Bold", bold="Helvetica-Bold")
         except:
             pass
 
@@ -566,12 +541,12 @@ def generate_pdf_report(student: dict, output_dir: str) -> str:
     # 自定义样式（使用中文字体）
     title_style = ParagraphStyle(
         'CustomTitle', parent=styles['Title'],
-        fontName='MSYHBD', fontSize=18,
+        fontName='MSYH', fontSize=18,
         textColor=HexColor('#1A56DB'), spaceAfter=6
     )
     section_style = ParagraphStyle(
         'Section', parent=styles['Normal'],
-        fontName='MSYHBD', fontSize=12,
+        fontName='MSYH', fontSize=12,
         textColor=HexColor('#1A56DB'), spaceBefore=10, spaceAfter=4
     )
     body_style = ParagraphStyle(
@@ -582,7 +557,7 @@ def generate_pdf_report(student: dict, output_dir: str) -> str:
     )
     body_bold_style = ParagraphStyle(
         'BodyBold', parent=styles['Normal'],
-        fontName='MSYHBD', fontSize=10.5,
+        fontName='MSYH', fontSize=10.5,
         textColor=HexColor('#333333'), spaceAfter=4,
         leading=18
     )
@@ -750,12 +725,12 @@ def generate_category_pdf_report(category: str, students: list, output_dir: str)
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         'Title', parent=styles['Title'],
-        fontName='MSYHBD', fontSize=16,
+        fontName='MSYH', fontSize=16,
         textColor=HexColor('#1A56DB'), spaceAfter=6
     )
     name_style = ParagraphStyle(
         'Name', parent=styles['Normal'],
-        fontName='MSYHBD', fontSize=12,
+        fontName='MSYH', fontSize=12,
         textColor=HexColor('#333333'), spaceBefore=12, spaceAfter=4
     )
     body_style = ParagraphStyle(
