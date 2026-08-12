@@ -256,6 +256,7 @@ def _call_llm(prompt: str, max_retry: int = 2) -> str:
         print(f"[LLM] 命中缓存")
         return cached
 
+    last_error = ""
     for attempt in range(max_retry):
         try:
             response = client.chat.completions.create(
@@ -271,47 +272,63 @@ def _call_llm(prompt: str, max_retry: int = 2) -> str:
             if content and content.strip():
                 _set_cache(ckey, content)
                 return content
+            last_error = "LLM返回空内容"
             print(f"[LLM] 空返回，重试 {attempt+1}/{max_retry}")
         except Exception as e:
+            last_error = str(e)
             print(f"[LLM] 异常: {e}，重试 {attempt+1}/{max_retry}")
             if attempt < max_retry - 1:
                 import time as _time
                 _time.sleep(0.5)
-    return "报告生成失败，请重新生成"
+    return f"报告生成失败，请重新生成\n\n错误详情: {last_error}"
 
 
 def generate_single_report(item: dict, lectures: list = None, attendance_rates: dict = None) -> dict:
     """为单个学生生成报告"""
-    template = load_prompt("batch_report_v3.txt")
-    student_data = build_student_data_text(item["row_data"])
-    
-    # 讲次分析
-    lecture_context = ""
-    if lectures and attendance_rates:
-        from core.lecture_parser import analyze_student_lectures, build_lecture_context as build_ctx
-        lec_analysis = analyze_student_lectures(item["row_data"], lectures, attendance_rates)
-        lecture_context = build_ctx(lec_analysis, lectures)
-    
-    prompt = template.format(
-        name=item["name"],
-        lecture_context=lecture_context,
-        student_data=student_data
-    )
-    
-    report_text = _call_llm(prompt)
-    
-    # 整个输出就是报告（不再分割快速分析和正式报告）
-    analysis = ""
-    formal_report = report_text
-    
-    return {
-        "学生姓名": item["name"],
-        "学生ID": item.get("student_id", ""),
-        "分类": item.get("category", ""),
-        "快速分析": analysis,
-        "正式报告": formal_report,
-        "完整输出": report_text,
-    }
+    try:
+        template = load_prompt("batch_report_v3.txt")
+        student_data = build_student_data_text(item["row_data"])
+        
+        # 讲次分析
+        lecture_context = ""
+        if lectures and attendance_rates:
+            from core.lecture_parser import analyze_student_lectures, build_lecture_context as build_ctx
+            lec_analysis = analyze_student_lectures(item["row_data"], lectures, attendance_rates)
+            lecture_context = build_ctx(lec_analysis, lectures)
+        
+        # 安全格式化：转义 student_data 中的花括号，防止 format() 报错
+        safe_student_data = student_data.replace("{", "{{").replace("}", "}}")
+        safe_lecture_context = lecture_context.replace("{", "{{").replace("}", "}}")
+        
+        prompt = template.format(
+            name=item["name"],
+            lecture_context=safe_lecture_context,
+            student_data=safe_student_data
+        )
+        
+        report_text = _call_llm(prompt)
+        
+        # 整个输出就是报告（不再分割快速分析和正式报告）
+        analysis = ""
+        formal_report = report_text
+        
+        return {
+            "学生姓名": item["name"],
+            "学生ID": item.get("student_id", ""),
+            "分类": item.get("category", ""),
+            "快速分析": analysis,
+            "正式报告": formal_report,
+            "完整输出": report_text,
+        }
+    except Exception as e:
+        return {
+            "学生姓名": item.get("name", "未知"),
+            "学生ID": item.get("student_id", ""),
+            "分类": item.get("category", ""),
+            "快速分析": "",
+            "正式报告": f"报告生成异常: {e}",
+            "完整输出": f"报告生成异常: {e}",
+        }
 
 
 def batch_generate_reports(students_data: list, progress_callback=None, lectures: list = None, attendance_rates: dict = None) -> list:

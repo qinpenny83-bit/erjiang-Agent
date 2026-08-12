@@ -966,13 +966,22 @@ with tab3:
                 if st.session_state.get("lec_single_report"):
                     single_report = st.session_state["lec_single_report"]
                     single_name = st.session_state["lec_single_report_name"]
-                    st.success(f"报告生成完成！{single_name}，耗时 {st.session_state['lec_single_report_elapsed']:.1f} 秒")
+                    report_content = single_report.get("正式报告", single_report.get("完整输出", single_report.get("report", "")))
+                    
+                    # 检查是否为错误报告
+                    is_error = report_content.startswith("报告生成失败") or report_content.startswith("报告生成异常")
+                    
+                    if is_error:
+                        st.error(f"报告生成失败！{single_name}，耗时 {st.session_state['lec_single_report_elapsed']:.1f} 秒")
+                        st.error(report_content)
+                    else:
+                        st.success(f"报告生成完成！{single_name}，耗时 {st.session_state['lec_single_report_elapsed']:.1f} 秒")
 
                     st.subheader(f"📋 {single_name} 的学情报告")
                     st.markdown(f"**分类**: {single_report.get('分类', single_report.get('category', '未知'))}")
                     st.text_area(
                         "学情报告",
-                        value=single_report.get("正式报告", single_report.get("完整输出", single_report.get("report", ""))),
+                        value=report_content,
                         height=400,
                         key="lec_single_report_preview",
                         label_visibility="collapsed"
