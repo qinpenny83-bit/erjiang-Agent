@@ -26,40 +26,46 @@ def _register_chinese_font():
     if _FONT_REGISTERED:
         return
 
+    # Linux 优先（Streamlit Cloud 运行环境），Windows 其次
     font_paths = [
+        # === Linux (Streamlit Cloud / Docker) ===
+        # Noto Sans CJK (fonts-noto-cjk，packages.txt 安装)
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        # WenQuanYi Micro Hei（轻量中文字体）
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        # DroidSansFallback（Debian 默认中文字体，无需额外安装）
+        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
         # === Windows ===
         r"C:\Windows\Fonts\msyh.ttc",
         r"C:\Windows\Fonts\msyhbd.ttc",
         r"C:\Windows\Fonts\simsun.ttc",
         r"C:\Windows\Fonts\simhei.ttf",
-        # === Linux (Streamlit Cloud / Docker) ===
-        # Noto Sans CJK (fonts-noto-cjk)
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        # DroidSansFallback（Debian 默认中文字体，无需额外安装）
-        "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
-        # WenQuanYi Micro Hei（轻量中文字体）
-        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
     ]
 
     _registered = False
+    _used_path = ""
     for path in font_paths:
         try:
             if os.path.exists(path):
                 pdfmetrics.registerFont(TTFont("MSYH", path))
                 _registered = True
-                print(f"[PDF] 字体注册成功: {path} -> MSYH")
+                _used_path = path
+                print(f"[FONT] 当前使用字体路径: {path}")
+                print(f"[FONT] MSYH 是否注册成功: True")
                 break
-        except:
-            pass
+        except Exception as e:
+            print(f"[FONT] 尝试注册 {path} 失败: {e}")
 
     if _registered:
         try:
             pdfmetrics.registerFontFamily("MSYH", normal="MSYH", bold="MSYH")
+            print(f"[FONT] 已注册字体列表: {pdfmetrics.getRegisteredFontNames()}")
         except:
             pass
     else:
-        print("[PDF] 警告：未找到任何中文字体，PDF 中文将无法显示")
+        print("[FONT] MSYH 是否注册成功: False")
+        print("[FONT] 警告：未找到任何中文字体，PDF 中文将无法显示")
         try:
             pdfmetrics.registerFontFamily("MSYH", normal="Helvetica", bold="Helvetica-Bold")
         except:
