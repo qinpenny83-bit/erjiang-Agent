@@ -20,7 +20,7 @@ def _get_config(key: str, default: str = "") -> str:
 # LLM 配置
 OPENAI_API_KEY = _get_config("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = _get_config("OPENAI_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = _get_config("MODEL_NAME", "gpt-4o-mini")
+MODEL_NAME = "deepseek-v4-flash"  # 强制锁定 v4-flash，不允许被环境变量覆盖
 TEMPERATURE = 0.7
 MAX_TOKENS = 4000
 

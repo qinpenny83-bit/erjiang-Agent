@@ -27,7 +27,7 @@ from core.prompt_utils import append_constraints
 
 # ==================== 全局配置 ====================
 
-_MODEL_NAME = os.environ.get("MODEL_NAME", "deepseek-v4-flash")
+_MODEL_NAME = "deepseek-v4-flash"  # 强制锁定 v4-flash
 _VISION_MODEL = os.environ.get("VISION_MODEL", "gpt-4o-mini")
 
 # 提示词模板（模块加载时读取一次）
@@ -143,7 +143,7 @@ def _call_llm(
         LLM返回的文本内容
     """
     client = get_client()
-    model = os.environ.get("MODEL_NAME", _MODEL_NAME)
+    model = _MODEL_NAME  # 强制使用 v4-flash
 
     messages = [
         {"role": "system", "content": system_prompt},
