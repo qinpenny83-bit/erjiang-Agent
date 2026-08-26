@@ -1,6 +1,15 @@
 __pycache__/
 *.pyc
+
+# ===== 密钥与敏感信息（严禁提交）=====
 .env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+secrets.toml
+*.key
+*.pem
+credentials*.json
 data/chroma_db/
 data/logs/
 data/output/
