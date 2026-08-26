@@ -17,11 +17,14 @@ from reportlab.lib.colors import HexColor
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.pdfmetrics import registerFontFamily
 from reportlab.pdfbase.ttfonts import TTFont
 
 # 注册中文字体（Windows + Linux 双环境兼容，统一使用 NotoCJK 一个字体）
 # reportlab 的 TTFont 不支持 .ttc（TrueType Collection），仅支持 .ttf
 # 使用 fontTools 从 .ttc 中提取单个 .ttf 到临时文件
+# 注意：云端 Linux 系统自带的 DroidSansFallback 不含 ASCII 数字/百分号等字形，
+# 会导致报告中所有数字渲染为空白，因此优先使用应用内置的 Noto Sans SC 完整字体
 _FONT_REGISTERED = False
 _FONT_ERROR = None
 _TEMP_TTF_FILES = []  # 记录临时 .ttf 文件，进程退出时清理
@@ -44,11 +47,17 @@ def _register_chinese_font():
     if _FONT_REGISTERED:
         return
 
+    _base_dir = os.path.dirname(os.path.abspath(__file__))
+    # 应用内置完整字体（优先级最高，云端/本地渲染完全一致）
+    bundled_regular = os.path.normpath(os.path.join(_base_dir, "..", "assets", "fonts", "NotoSansSC-Regular.ttf"))
+    bundled_bold = os.path.normpath(os.path.join(_base_dir, "..", "assets", "fonts", "NotoSansSC-Bold.ttf"))
+
     # Linux 优先（Streamlit Cloud 运行环境），Windows 其次
     # 优先使用 .ttf 文件，.ttc 文件通过 fontTools 提取后使用
     font_paths = [
-        # === Linux .ttf 优先 ===
-        # DroidSansFallback（Debian 默认，fonts-droid-fallback 提供 .ttf）
+        # === 应用内置 .ttf（Noto Sans SC，含 ASCII 数字/符号/全角符号，最优先）===
+        bundled_regular,
+        # === Linux .ttf（仅兜底：DroidSansFallback 缺 ASCII 数字字形） ===
         "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
         # === Linux .ttc（通过 fontTools 提取） ===
         # WenQuanYi Micro Hei
@@ -105,6 +114,15 @@ def _register_chinese_font():
         print(f"[FONT] 注册失败原因: {_FONT_ERROR}")
     else:
         _FONT_ERROR = None
+        # 注册粗体并建立字体族映射：让 <b> 标签渲染真粗体（数字加粗效果与旧版一致）
+        if os.path.exists(bundled_bold):
+            try:
+                pdfmetrics.registerFont(TTFont("NotoCJK-Bold", bundled_bold))
+                registerFontFamily("NotoCJK", normal="NotoCJK", bold="NotoCJK-Bold",
+                                   italic="NotoCJK", boldItalic="NotoCJK-Bold")
+                print(f"[FONT] 粗体已注册并建立字体族: {bundled_bold}")
+            except Exception as e:
+                print(f"[FONT] 粗体注册失败（不影响生成，加粗将退化为常规体）: {e}")
 
     # 打印最终注册字体列表
     registered_names = pdfmetrics.getRegisteredFontNames()
@@ -309,40 +327,79 @@ def _classify_by_raw_columns(row_data: dict, all_students_data: list = None) -> 
         return "差"
 
 
-def _call_llm(prompt: str, max_retry: int = 2) -> str:
-    """调用LLM，带缓存和重试机制"""
+# ===== 报告完整性校验（防止LLM截断/残缺输出）=====
+_REQUIRED_MODULES = [
+    ("学情总览", ("学情总览",)),
+    ("答题表现", ("答题表现",)),
+    ("学习亮点", ("学习亮点",)),
+    ("待优化", ("待优化",)),
+    ("学习提升规划", ("学习提升规划", "学习规划", "学习安排")),
+    ("教师寄语", ("教师寄语", "寄语")),
+]
+
+
+def _is_report_complete(text: str) -> bool:
+    """校验报告是否包含全部6个必需模块，任一缺失视为不完整（截断/异常）"""
+    if not text or not text.strip():
+        return False
+    if text.startswith("报告生成失败") or text.startswith("报告生成异常"):
+        return False
+    for _, variants in _REQUIRED_MODULES:
+        if not any(v in text for v in variants):
+            return False
+    return True
+
+
+def _call_llm(prompt: str, max_retry: int = 3) -> str:
+    """调用LLM，带缓存自愈、完整性校验与自动重试机制"""
     system_msg = "你是专业英语学情报告单撰写助手。严格依据原始数据生成报告，禁止编造。"
-    # 检查缓存
+    # 检查缓存（缓存自愈：残缺的历史缓存不返回，触发重新生成）
     ckey = _cache_key(prompt, system_msg)
     cached = _get_cached(ckey)
-    if cached:
+    if cached and _is_report_complete(cached):
         print(f"[LLM] 命中缓存")
         return cached
 
     last_error = ""
+    best_content = ""  # 保留最长的不完整结果，重试全部失败时兜底返回
     for attempt in range(max_retry):
         try:
             response = client.chat.completions.create(
                 model=MODEL_NAME,
                 temperature=0.1,
-                max_tokens=4000,
+                max_tokens=MAX_TOKENS,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt}
                 ]
             )
             content = response.choices[0].message.content
+            finish = getattr(response.choices[0], "finish_reason", None)
             if content and content.strip():
-                _set_cache(ckey, content)
-                return content
-            last_error = "LLM返回空内容"
-            print(f"[LLM] 空返回，重试 {attempt+1}/{max_retry}")
+                if _is_report_complete(content):
+                    # 仅完整报告写入缓存，避免残缺输出污染缓存
+                    _set_cache(ckey, content)
+                    return content
+                if len(content) > len(best_content):
+                    best_content = content
+                missing = [name for name, variants in _REQUIRED_MODULES
+                           if not any(v in content for v in variants)]
+                last_error = f"输出不完整（缺模块: {','.join(missing)}, finish_reason={finish}）"
+                print(f"[LLM] 第{attempt + 1}/{max_retry}次输出不完整，缺: {missing}，重试...")
+            else:
+                last_error = "LLM返回空内容"
+                print(f"[LLM] 空返回，重试 {attempt + 1}/{max_retry}")
         except Exception as e:
             last_error = str(e)
-            print(f"[LLM] 异常: {e}，重试 {attempt+1}/{max_retry}")
-            if attempt < max_retry - 1:
-                import time as _time
-                _time.sleep(0.5)
+            print(f"[LLM] 异常: {e}，重试 {attempt + 1}/{max_retry}")
+        if attempt < max_retry - 1:
+            import time as _time
+            _time.sleep(1)
+
+    if best_content:
+        # 尽力而为返回（不写缓存，下次同一学生会重新生成）
+        print(f"[LLM] 重试后仍不完整，返回最长结果（{len(best_content)}字符）")
+        return best_content
     return f"报告生成失败，请重新生成\n\n错误详情: {last_error}"
 
 
@@ -552,7 +609,6 @@ def generate_category_word_report(category: str, students: list, output_dir: str
 
 
 def _markdown_to_reportlab(text: str) -> str:
-    """将简单markdown格式转换为reportlab支持的HTML标签格式"""
     # 先转markdown格式为HTML标签，再转义文本中的XML特殊字符
     # 使用占位符保护HTML标签
     bold_placeholders = {}
