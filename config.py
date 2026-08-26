@@ -17,9 +17,9 @@ def _get_config(key: str, default: str = "") -> str:
         return default
 
 
-# LLM 配置
+# LLM 配置（Key 从环境变量/Streamlit Secrets 读取，严禁硬编码）
 OPENAI_API_KEY = _get_config("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = _get_config("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_BASE_URL = _get_config("OPENAI_BASE_URL", "https://api.deepseek.com/v1")
 MODEL_NAME = "deepseek-v4-flash"  # 强制锁定 v4-flash，不允许被环境变量覆盖
 TEMPERATURE = 0.7
 MAX_TOKENS = 4000

@@ -14,14 +14,8 @@ MAX_WORKERS = 20
 
 
 def get_client() -> OpenAI:
-    """从环境变量获取配置并创建OpenAI客户端"""
-    api_key = os.environ.get("OPENAI_API_KEY")
-    base_url = os.environ.get("OPENAI_BASE_URL")
-    if not api_key:
-        raise ValueError("环境变量 OPENAI_API_KEY 未设置")
-    if not base_url:
-        raise ValueError("环境变量 OPENAI_BASE_URL 未设置")
-    return OpenAI(api_key=api_key, base_url=base_url)
+    """统一使用 config.py 中的硬编码配置，确保所有模块用同一个 Key"""
+    return OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
 
 from core.prompt_utils import append_constraints

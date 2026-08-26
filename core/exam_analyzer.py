@@ -35,12 +35,10 @@ _SYSTEM_PROMPT: Optional[str] = None
 
 
 def _get_vision_client():
-    """获取视觉模型客户端（用于图片识别）"""
+    """获取视觉模型客户端（用于图片识别），统一使用 config.py 配置"""
     from openai import OpenAI
-    return OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY"),
-        base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-    )
+    from config import OPENAI_API_KEY, OPENAI_BASE_URL
+    return OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
 
 def _encode_image(image_path: str) -> str:
