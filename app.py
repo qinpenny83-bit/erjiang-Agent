@@ -29,6 +29,9 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # Tab 1: 学情续费预警系统
 # ============================================================
 with tab1:
+    # 🔥 今日风险处理中心：顶部视觉占位（在学情分析完成后渲染，未上传时显示引导）
+    task_center_slot = st.container()
+
     st.markdown("""
     <div style="
         background: linear-gradient(135deg, #e8eaf6 0%, #f3e5f5 100%);
@@ -445,6 +448,14 @@ with tab1:
 
         except Exception as e:
             st.error(f"处理出错：{e}")
+
+    # ============================================================
+    # 🔥 今日风险处理中心（渲染到Tab1顶部占位）
+    # 链路：风险识别 → 今日任务生成 → AI优先级排序 → 老师执行 → 结果反馈 → 动态复评
+    # ============================================================
+    with task_center_slot:
+        from core.task_center_ui import render_task_center
+        render_task_center()
 
 
 # ============================================================

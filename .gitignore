@@ -19,6 +19,9 @@ data/sample_students.xlsx
 data/cache/
 data/debug_*
 data/*.json
+# 今日风险处理中心任务数据（含真实学员姓名/学情，仅保留目录结构）
+data/task_center/*
+!data/task_center/.gitkeep
 temp/
 *.zip
 output/
