@@ -476,21 +476,153 @@ def downgrade_tier(tier: str) -> str:
         return tier
 
 
-def complete_task(tasks: list, task_id: str, comm_result: str, teacher_note: str = "") -> list:
-    """【完成跟进】+ 沟通结果反馈 → 规则化复评 → 下一步任务
+def _rule_reevaluate(task: dict, comm_result: str) -> dict:
+    """规则化复评（第一阶段逻辑原样抽取，作为AI不可用时的兜底）
 
-    闭环逻辑（当前规则化，第二阶段可换 ai_reevaluate 同签名替换）：
+    返回结构与AI动态复评统一，供 _apply_reeval 统一应用。
+    """
+    rule = RESULT_RULES.get(comm_result, RESULT_RULES["其他"])
+    old_tier = task.get("当前风险等级", "P3")
+    new_tier = old_tier
+    direction = "保持"
+    if rule["tier_delta"] < 0:
+        new_tier = downgrade_tier(old_tier)
+        direction = "下降"
+    return {
+        "模式": "规则复评（AI不可用兜底）",
+        "当前风险等级": new_tier,
+        "风险方向": direction,
+        "复评结论": f"按「{comm_result}」规则复评：等级{old_tier}→{new_tier}",
+        "判断依据": f"规则映射：沟通结果「{comm_result}」对应等级调整{rule['tier_delta']}级、{rule['follow_days']}天后跟进",
+        "下一步动作": rule["next_action"],
+        "跟进天数": rule["follow_days"],
+        "升级标记": bool(rule.get("escalate", False)) or bool(task.get("升级标记")),
+        "需人工复核": False,
+    }
+
+
+def _apply_reeval(t: dict, reeval: dict, comm_result: str) -> None:
+    """统一应用复评结果（AI与规则同构）：只写任务侧字段 + 时间线 + AI复评结果存档"""
+    now = _now_str()
+    old_tier = t["当前风险等级"]
+    new_tier = reeval["当前风险等级"]
+    mode = reeval.get("模式", "规则复评（AI不可用兜底）")
+    t["AI复评结果"] = {
+        "时间": now,
+        "模式": mode,
+        "本次沟通结果": comm_result,
+        "风险方向": reeval["风险方向"],
+        "当前风险等级": new_tier,
+        "复评结论": reeval["复评结论"],
+        "判断依据": reeval["判断依据"],
+        "下一步动作": reeval["下一步动作"],
+        "跟进天数": reeval["跟进天数"],
+        "升级标记": reeval["升级标记"],
+        "需人工复核": reeval.get("需人工复核", False),
+    }
+
+    # 1. 人工复核路径：等级保持不变，标记复核（不降级，安全第一）
+    if reeval.get("需人工复核"):
+        t["升级标记"] = True
+        t["时间线"].append({
+            "时间": now, "事件": f"AI重新评估风险（{mode}）",
+            "详情": f"信息不足，建议人工复核：{reeval['判断依据'][:80]}",
+        })
+        # 尽快人工复核（1天内）
+        deadline = datetime.now() + timedelta(days=1)
+        t["任务状态"] = STATUS_FOLLOWUP
+        t["建议完成时间"] = deadline.strftime("%Y-%m-%d %H:%M")
+        t["下一步动作"] = "信息不足，建议人工复核（人工确认后再决定等级与跟进安排）"
+        t["时间线"].append({
+            "时间": now, "事件": "自动生成下一步任务",
+            "详情": f"信息不足，建议人工复核（建议完成：{t['建议完成时间']}）",
+        })
+        t["更新时间"] = now
+        return
+
+    # 2. 等级变化 → 写任务侧（原始student["分层"]永不修改）
+    if new_tier != old_tier:
+        t["当前风险等级"] = new_tier
+        t["时间线"].append({
+            "时间": now, "事件": f"AI重新评估风险（{mode}）",
+            "详情": f"风险等级由{old_tier}调整为{new_tier}（风险{reeval['风险方向']}）：{reeval['复评结论'][:60]}",
+        })
+    else:
+        t["时间线"].append({
+            "时间": now, "事件": f"AI重新评估风险（{mode}）",
+            "详情": f"风险等级维持{old_tier}（风险{reeval['风险方向']}）：{reeval['复评结论'][:60]}",
+        })
+
+    # 3. 降至P4 → 风险解除，任务关闭
+    if new_tier == "P4":
+        t["任务状态"] = STATUS_CLOSED
+        t["下一步动作"] = "风险解除，转入常规维护"
+        t["时间线"].append({
+            "时间": now, "事件": "任务关闭",
+            "详情": f"复评后风险解除（P4），转入常规维护。依据：{reeval['判断依据'][:60]}",
+        })
+        t["更新时间"] = now
+        return
+
+    # 4. 升级标记（风险上升/家长疑虑未化解/连续未接通等）
+    if reeval.get("升级标记"):
+        t["升级标记"] = True
+        t["时间线"].append({
+            "时间": now, "事件": "⚠️ 进入重点升级处理",
+            "详情": f"{reeval['复评结论'][:60]}，任务标记为重点升级",
+        })
+
+    # 5. 生成下一步：待二次跟进 + 跟进时间
+    days = reeval["跟进天数"]
+    if days == 0:
+        # 今日内再试：白天(9-19点)约定今日21:00前；夜间则约定次日上午10:00（避免凌晨打扰）
+        now_dt = datetime.now()
+        if 9 <= now_dt.hour < 19:
+            deadline = now_dt.replace(hour=21, minute=0, second=0, microsecond=0)
+        else:
+            deadline = (now_dt + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    else:
+        deadline = datetime.now() + timedelta(days=days)
+    t["任务状态"] = STATUS_FOLLOWUP
+    t["建议完成时间"] = deadline.strftime("%Y-%m-%d %H:%M")
+    t["下一步动作"] = reeval["下一步动作"]
+    t["时间线"].append({
+        "时间": now, "事件": "自动生成下一步任务",
+        "详情": f"{reeval['下一步动作']}（建议完成：{t['建议完成时间']}）",
+    })
+    t["更新时间"] = now
+
+
+def complete_task(tasks: list, task_id: str, comm_result: str, teacher_note: str = "",
+                  student_context: dict = None, use_ai: bool = True) -> list:
+    """【完成跟进】+ 沟通结果反馈 → AI动态复评 → 下一步任务
+
+    第二阶段闭环逻辑：
     1. 记录沟通结果 + 时间线
-    2. 按结果规则调整任务侧等级（家长认可→降级；P3降至P4→风险解除关闭）
-    3. 自动生成下一步动作（二次跟进任务/超时升级标记）
+    2. AI动态复评（综合学情/历史沟通/本次结果/备注；禁止机械映射等级）
+       AI不可用/输出非法时自动降级到规则复评（第一阶段逻辑兜底）
+    3. 统一应用：任务侧等级调整（P4→关闭）、升级标记、下一步任务与跟进时间
+    4. 复评全过程存档到 task["AI复评结果"]，供UI展示与追溯
+
+    边界：原始 student["分层"] 永不修改，只写任务侧"当前风险等级"。
     """
     t = _find(tasks, task_id)
     if not t or comm_result not in RESULT_RULES:
         return tasks
     now = _now_str()
-    rule = RESULT_RULES[comm_result]
 
-    # 1. 记录沟通结果
+    # 1. 复评决策：AI优先（在记录本次沟通前执行，确保AI看到的"历史"不含本次）
+    reeval = None
+    if use_ai and not t.get("is_demo"):
+        try:
+            from core.ai_reevaluator import ai_reevaluate as _ai_eval
+            reeval = _ai_eval(t, comm_result, teacher_note, student_context=student_context)
+        except Exception as e:
+            print(f"[复评] AI模块异常，降级规则复评: {e}")
+    if reeval is None:
+        reeval = _rule_reevaluate(t, comm_result)
+
+    # 2. 记录沟通结果
     entry = {"时间": now, "结果": comm_result}
     if teacher_note:
         entry["备注"] = teacher_note
@@ -500,48 +632,8 @@ def complete_task(tasks: list, task_id: str, comm_result: str, teacher_note: str
         "详情": comm_result + (f"（备注：{teacher_note}）" if teacher_note else ""),
     })
 
-    # 2. 规则化复评（只改任务侧等级）
-    old_tier = t["当前风险等级"]
-    if rule["tier_delta"] < 0:
-        new_tier = downgrade_tier(old_tier)
-        t["当前风险等级"] = new_tier
-        t["时间线"].append({"时间": now, "事件": "AI重新评估风险", "详情": f"风险等级由{old_tier}调整为{new_tier}"})
-
-        # 降至P4 → 风险解除，任务关闭
-        if new_tier == "P4":
-            t["任务状态"] = STATUS_CLOSED
-            t["下一步动作"] = "风险解除，转入常规维护"
-            t["时间线"].append({"时间": now, "事件": "任务关闭", "详情": "复评后风险解除（P4），转入常规维护"})
-            t["更新时间"] = now
-            return tasks
-
-    # 3. 升级标记（家长仍存疑虑）
-    if rule.get("escalate"):
-        t["升级标记"] = True
-        t["时间线"].append({
-            "时间": now, "事件": "⚠️ 进入重点升级处理",
-            "详情": "家长仍存在疑虑，任务标记为重点升级，需24小时内二次跟进",
-        })
-
-    # 4. 生成下一步：本任务进入待二次跟进，刷新建议完成时间与下一步动作
-    days = rule["follow_days"]
-    if days == 0:
-        # 未接通→今日再试：白天(9-19点)约定今日21:00前；夜间则约定次日上午10:00（避免凌晨打扰）
-        now = datetime.now()
-        if 9 <= now.hour < 19:
-            deadline = now.replace(hour=21, minute=0, second=0, microsecond=0)
-        else:
-            deadline = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-    else:
-        deadline = datetime.now() + timedelta(days=days)
-    t["任务状态"] = STATUS_FOLLOWUP
-    t["建议完成时间"] = deadline.strftime("%Y-%m-%d %H:%M")
-    t["下一步动作"] = rule["next_action"]
-    t["时间线"].append({
-        "时间": now, "事件": "自动生成下一步任务",
-        "详情": f"{rule['next_action']}（建议完成：{t['建议完成时间']}）",
-    })
-    t["更新时间"] = now
+    # 3. 统一应用（AI与规则同构）
+    _apply_reeval(t, reeval, comm_result)
     return tasks
 
 
@@ -588,25 +680,26 @@ def close_task(tasks: list, task_id: str, reason: str = "") -> list:
 
 
 # ============================================================
-# 第二阶段预留接口：AI动态复评（当前规则化实现，签名保持不变）
+# 第二阶段：AI动态复评（真实LLM，规则自动兜底）
 # ============================================================
 
-def ai_reevaluate(task: dict, comm_result: str, teacher_note: str = "") -> dict:
-    """沟通结果 → 新风险评估。
+def ai_reevaluate(task: dict, comm_result: str, teacher_note: str = "",
+                  student_context: dict = None) -> dict:
+    """沟通结果 → AI动态风险评估（第一阶段预留接口，第二阶段接入LLM）。
 
-    当前：调用规则化复评（RESULT_RULES）
-    第二阶段：接入LLM，综合新学情/新成绩/沟通记录动态复评。
-    返回签名保持：{"当前风险等级": str, "下一步动作": str, "升级标记": bool}
+    综合原始学情/当前等级/历史沟通/本次结果/老师备注动态判断，
+    禁止机械映射等级；AI不可用时自动降级规则复评。
+    返回签名扩展：{"当前风险等级", "风险方向", "复评结论", "判断依据",
+                "下一步动作", "跟进天数", "升级标记", "需人工复核", "模式"}
     """
-    rule = RESULT_RULES.get(comm_result, RESULT_RULES["其他"])
-    new_tier = task.get("当前风险等级")
-    if rule["tier_delta"] < 0:
-        new_tier = downgrade_tier(new_tier)
-    return {
-        "当前风险等级": new_tier,
-        "下一步动作": rule["next_action"],
-        "升级标记": bool(rule.get("escalate", False)) or bool(task.get("升级标记")),
-    }
+    try:
+        from core.ai_reevaluator import ai_reevaluate as _ai_eval
+        result = _ai_eval(task, comm_result, teacher_note, student_context=student_context)
+        if result:
+            return result
+    except Exception as e:
+        print(f"[ai_reevaluate] AI不可用: {e}")
+    return _rule_reevaluate(task, comm_result)
 
 
 # ============================================================
@@ -667,7 +760,7 @@ def get_demo_tasks() -> list:
 
     def demo_task(seq, name, tier, status, reason, trend_desc, comm_gap, action,
                   deadline_offset_h, priority, timeline=None, results=None, escalated=False,
-                  cur_tier=None):
+                  cur_tier=None, ai_reeval=None):
         return {
             "task_id": f"DEMO_{seq:03d}_{name}",
             "学生姓名": name,
@@ -695,6 +788,7 @@ def get_demo_tasks() -> list:
                 "完成标准": "明确家长核心问题，确定下一步服务动作" if seq <= 2 else "完成学习反馈，记录家长反馈要点",
             },
             "升级标记": escalated,
+            "AI复评结果": ai_reeval,
             "沟通结果历史": results or [],
             "时间线": timeline or [],
             "创建时间": n(),
@@ -741,10 +835,18 @@ def get_demo_tasks() -> list:
             [{"时间": n(), "事件": "AI识别为P1风险", "详情": "成绩下降+家长疑虑"},
              {"时间": n(), "事件": "自动生成今日任务", "详情": "今日优先电话沟通"},
              {"时间": n(), "事件": "老师完成沟通", "详情": "家长认可方案"},
-             {"时间": n(), "事件": "AI重新评估风险", "详情": "风险等级由P1调整为P2"},
+             {"时间": n(), "事件": "AI重新评估风险（AI动态复评）", "详情": "风险等级由P1调整为P2（风险下降）：家长认可改进方案，配合意愿明确"},
              {"时间": n(), "事件": "自动生成下一步任务", "详情": "3天后进行学习效果回访"}],
             results=[{"时间": n(), "结果": "家长认可方案", "备注": "家长同意先按改进方案执行一个月"}],
             cur_tier="P2",
+            ai_reeval={
+                "时间": n(), "模式": "AI动态复评（Demo模拟）", "本次沟通结果": "家长认可方案",
+                "风险方向": "下降", "当前风险等级": "P2",
+                "复评结论": "家长认可改进方案且配合意愿明确，风险由P1降至P2",
+                "判断依据": "沟通结果为家长认可方案；备注显示家长同意按改进方案执行一个月；成绩虽仍下降但已有明确改进计划",
+                "下一步动作": "3天后进行学习效果回访，确认改进方案执行情况",
+                "跟进天数": 3, "升级标记": False, "需人工复核": False,
+            },
         ),
         demo_task(
             5, "示例·孙同学", "P3", STATUS_PENDING,

@@ -286,6 +286,34 @@ def _render_task_card(t: dict, idx: int, students_by_name: dict, is_demo: bool, 
                     note = f" ｜ 备注：{r['备注']}" if r.get("备注") else ""
                     st.markdown(f"- **{r['时间']}** — {r['结果']}{note}")
 
+        # --- AI复评结果（第二阶段：AI动态复评展示） ---
+        r = t.get("AI复评结果")
+        if r:
+            is_rule = r.get("模式", "").startswith("规则")
+            need_review = r.get("需人工复核", False)
+            header = ("⚖️ AI复评结果（规则兜底）" if is_rule else "🤖 AI复评结果") + \
+                     (" · ⚠️ 需人工复核" if need_review else "")
+            with st.expander(header, expanded=True):
+                if need_review:
+                    st.markdown(
+                        "<div style='background:#FFEBEE;border-left:3px solid #E53935;padding:8px 12px;"
+                        "border-radius:4px;color:#B71C1C;font-size:0.88em'>"
+                        "⚠️ <b>信息不足，建议人工复核</b> — AI无法基于现有数据做出可靠判断，"
+                        "请人工确认学生情况后再决定等级与跟进安排</div>", unsafe_allow_html=True)
+                rev_tier = r.get("当前风险等级", "-")
+                rev_color = TIER_COLORS.get(rev_tier, "#888")
+                direction = r.get("风险方向", "保持")
+                dir_icon = {"下降": "📉", "上升": "📈", "保持": "➡️"}.get(direction, "➡️")
+                mode_tag = "规则兜底" if is_rule else "AI动态复评"
+                st.markdown(
+                    f"{_badge(rev_tier, rev_color)} "
+                    f"<span style='color:#555;font-size:0.85em'>{dir_icon} 风险{direction} · {mode_tag} · {r.get('时间', '')}</span>",
+                    unsafe_allow_html=True)
+                st.markdown(f"**复评结论**：{r.get('复评结论', '-')}")
+                st.markdown(f"**风险变化原因**：{r.get('判断依据', '-')}")
+                st.markdown(f"**下一步行动**：{r.get('下一步动作', '-')}")
+                st.caption(f"基于沟通结果「{r.get('本次沟通结果', '-')}」综合学情数据、历史沟通记录与老师备注动态判断")
+
         # --- 风险时间线（第四层：做完之后下一步） ---
         with st.expander("📜 风险服务时间线"):
             for e in t.get("时间线", []):
@@ -328,13 +356,16 @@ def _render_task_card(t: dict, idx: int, students_by_name: dict, is_demo: bool, 
         if status in ("待处理", "处理中", "已超时", "待二次跟进"):
             with bc[col_i]:
                 with st.popover("✅ 完成跟进", key=f"done_{tid}", use_container_width=True):
-                    st.markdown("**沟通结果反馈**（完成后 AI 自动复评并生成下一步）")
+                    st.markdown("**沟通结果反馈**（完成后 AI 动态复评并生成下一步）")
                     result = st.selectbox("本次沟通结果", engine.COMM_RESULTS, key=f"cr_{tid}")
-                    note = st.text_area("老师备注（选填）", key=f"note_{tid}", height=68)
+                    note = st.text_area("老师备注（选填，AI复评的重要依据）", key=f"note_{tid}", height=68)
                     if st.button("提交并完成跟进", key=f"submit_{tid}", type="primary", use_container_width=True):
-                        _mutate(t, engine.complete_task, tasks_key=_tasks_key(is_demo),
-                                upload_name=upload_name, task_id=tid,
-                                comm_result=result, teacher_note=note)
+                        student = students_by_name.get(t["学生姓名"]) if not is_demo else None
+                        with st.spinner("AI动态复评中（综合学情、历史沟通与备注）..." if not is_demo else "处理中..."):
+                            _mutate(t, engine.complete_task, tasks_key=_tasks_key(is_demo),
+                                    upload_name=upload_name, task_id=tid,
+                                    comm_result=result, teacher_note=note,
+                                    student_context=student, use_ai=not is_demo)
             col_i += 1
         if status in ("待处理", "处理中", "待二次跟进", "已超时"):
             with bc[col_i]:
