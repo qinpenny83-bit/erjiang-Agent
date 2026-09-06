@@ -710,10 +710,66 @@ with tab2:
                                 unsafe_allow_html=True)
                             st.warning(diag.get("核心诉求", "") or "暂无")
 
-                    st.markdown("**学生当前情况**"
-                                "<span style='color:#90A4AE;font-size:0.8em'>（仅基于已提供信息）</span>",
+                    # --- 证据边界三分类：🟢已知事实 / 🔵基于事实的分析 / 🟡待确认信息 ---
+                    facts = diag.get("已知事实") or []
+                    analyses = diag.get("基于事实的分析") or []
+                    pendings = diag.get("待确认信息") or []
+                    verify_qs = diag.get("关键核实问题") or []
+                    if facts or analyses or pendings:
+                        c_f, c_a = st.columns(2)
+                        with c_f:
+                            st.markdown(
+                                "<span style='color:#2E7D32;font-size:0.85em'>🟢 <b>已知事实</b>"
+                                "<span style='color:#90A4AE'>（仅限已提供信息，未改写）</span></span>",
                                 unsafe_allow_html=True)
-                    st.info(diag.get("学生当前情况", "") or "暂无")
+                            if facts:
+                                for item in facts:
+                                    st.markdown(
+                                        f"<div style='background:#F1F8E9;border-left:3px solid #43A047;"
+                                        f"border-radius:4px;padding:5px 10px;color:#33691E;"
+                                        f"font-size:0.85em;margin-bottom:3px'>{item}</div>",
+                                        unsafe_allow_html=True)
+                            else:
+                                st.caption("暂无")
+                        with c_a:
+                            st.markdown(
+                                "<span style='color:#1565C0;font-size:0.85em'>🔵 <b>基于事实的分析</b>"
+                                "<span style='color:#90A4AE'>（推测已标注，非事实）</span></span>",
+                                unsafe_allow_html=True)
+                            if analyses:
+                                for item in analyses:
+                                    st.markdown(
+                                        f"<div style='background:#E3F2FD;border-left:3px solid #1E88E5;"
+                                        f"border-radius:4px;padding:5px 10px;color:#0D47A1;"
+                                        f"font-size:0.85em;margin-bottom:3px'>{item}</div>",
+                                        unsafe_allow_html=True)
+                            else:
+                                st.caption("暂无")
+                        # 🟡待确认信息 + 关键核实问题（全宽，突出提示）
+                        if pendings:
+                            st.markdown(
+                                "<span style='color:#795548;font-size:0.85em'>🟡 <b>待确认信息</b>"
+                                "<span style='color:#90A4AE'>（重要但未提供，不猜测）</span></span>",
+                                unsafe_allow_html=True)
+                            for item in pendings:
+                                st.markdown(
+                                    f"<div style='background:#FFF8E1;border-left:3px solid #F9A825;"
+                                    f"border-radius:4px;padding:5px 10px;color:#795548;"
+                                    f"font-size:0.85em;margin-bottom:3px'>{item}</div>",
+                                    unsafe_allow_html=True)
+                        if verify_qs:
+                            qs_html = "　".join(verify_qs)
+                            st.markdown(
+                                f"<div style='background:#FFFDE7;border:1px dashed #F9A825;"
+                                f"border-radius:4px;padding:6px 10px;color:#5D4037;"
+                                f"font-size:0.85em'>❓ <b>关键核实问题：</b>{qs_html}</div>",
+                                unsafe_allow_html=True)
+                    else:
+                        # 旧格式回退
+                        st.markdown("**学生当前情况**"
+                                    "<span style='color:#90A4AE;font-size:0.8em'>（仅基于已提供信息）</span>",
+                                    unsafe_allow_html=True)
+                        st.info(diag.get("学生当前情况", "") or "暂无")
                     cols = st.columns(2)
                     with cols[0]:
                         st.markdown("**家长核心顾虑**")
