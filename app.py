@@ -491,7 +491,7 @@ with tab2:
         max-width: 520px;
     ">
         <span style="color: #5c6bc0; font-size: 14px; font-weight: 500;">
-            💬 输入家长问题，系统将自动分类并生成专业回复话术。
+            💬 输入家长问题，AI自动判断家长真实诉求 → 明确沟通目标与成功标准 → 提取真实依据与踩雷提醒 → 生成话术 → 预判家长回应。
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -663,10 +663,56 @@ with tab2:
                 elapsed = time.time() - start_time
                 st.success(f"策略生成完成，耗时 {elapsed:.1f} 秒")
 
-                # ====== 一、问题判断 ======
+                # ====== 一、问题判断（含AI诉求识别） ======
                 with st.expander("🔍 一、问题判断", expanded=True):
                     diag = result.get("问题判断", {})
-                    st.markdown("**学生当前情况**")
+                    # --- AI诉求识别（情绪/阶段徽章） ---
+                    emotion = (diag.get("情绪状态") or "").strip()
+                    stage = (diag.get("沟通阶段") or "").strip()
+                    if emotion or stage:
+                        EMOTION_COLORS = {
+                            "焦虑": "#E53935", "质疑": "#F57C00", "犹豫": "#F9A825",
+                            "抵触": "#8E24AA", "认可": "#43A047", "平和": "#1E88E5",
+                        }
+                        STAGE_COLORS = {
+                            "效果质疑": "#F57C00", "续费犹豫": "#F9A825", "学习问题": "#1E88E5",
+                            "服务问题": "#8E24AA", "初次沟通": "#43A047", "感谢认可": "#43A047",
+                        }
+
+                        def _qa_badge(label: str, text: str, colors: dict) -> str:
+                            color = next((c for k, c in colors.items() if k in text), "#607D8B")
+                            main = text.split("，")[0].split(",")[0].strip()
+                            return (f"<span style='background:{color};color:white;padding:2px 10px;"
+                                    f"border-radius:10px;font-size:0.82em;font-weight:600;margin-right:6px'>"
+                                    f"{label}：{main}</span>")
+
+                        badge_html = ""
+                        if emotion:
+                            badge_html += _qa_badge("情绪", emotion, EMOTION_COLORS)
+                        if stage:
+                            badge_html += _qa_badge("沟通阶段", stage, STAGE_COLORS)
+                        st.markdown(badge_html, unsafe_allow_html=True)
+
+                    # --- 事实 vs AI分析 ---
+                    has_new_fields = diag.get("表层问题") or diag.get("核心诉求")
+                    if has_new_fields:
+                        c_f, c_a = st.columns(2)
+                        with c_f:
+                            st.markdown(
+                                "<span style='color:#37474F;font-size:0.85em'>🔵 <b>表层问题</b>"
+                                "<span style='color:#90A4AE'>（事实 · 家长原话）</span></span>",
+                                unsafe_allow_html=True)
+                            st.info(diag.get("表层问题", "") or "暂无")
+                        with c_a:
+                            st.markdown(
+                                "<span style='color:#37474F;font-size:0.85em'>🧠 <b>核心诉求</b>"
+                                "<span style='color:#90A4AE'>（AI分析 · 真正担心什么）</span></span>",
+                                unsafe_allow_html=True)
+                            st.warning(diag.get("核心诉求", "") or "暂无")
+
+                    st.markdown("**学生当前情况**"
+                                "<span style='color:#90A4AE;font-size:0.8em'>（仅基于已提供信息）</span>",
+                                unsafe_allow_html=True)
                     st.info(diag.get("学生当前情况", "") or "暂无")
                     cols = st.columns(2)
                     with cols[0]:
@@ -676,11 +722,21 @@ with tab2:
                         st.markdown("**解决重点**")
                         st.success(diag.get("解决重点", "") or "暂无")
 
-                # ====== 二、沟通策略 ======
+                # ====== 二、沟通策略（含成功标准） ======
                 with st.expander("🎯 二、沟通策略", expanded=True):
                     strat = result.get("沟通策略", {})
                     st.markdown("**沟通目标**")
                     st.info(strat.get("沟通目标", "") or "暂无")
+
+                    # 本次沟通成功标准（动态生成）
+                    success_list = strat.get("本次沟通成功标准") or []
+                    if success_list:
+                        st.markdown("**✅ 本次沟通成功标准**"
+                                    "<span style='color:#90A4AE;font-size:0.8em'>（达成即为成功，可逐项对照）</span>",
+                                    unsafe_allow_html=True)
+                        for s in success_list:
+                            st.markdown(f"☑️ {s}")
+
                     cols = st.columns(2)
                     with cols[0]:
                         st.markdown("**最佳切入点**")
@@ -689,8 +745,37 @@ with tab2:
                         st.markdown("**沟通注意事项**")
                         st.warning(strat.get("沟通注意事项", "") or "暂无")
 
-                # ====== 三、家长沟通话术 ======
-                with st.expander("💬 三、家长沟通话术", expanded=True):
+                # ====== 三、沟通依据与踩雷提醒 ======
+                evidence = result.get("沟通依据", {})
+                if evidence.get("真实依据") or evidence.get("注意避免"):
+                    with st.expander("📌 三、沟通依据与踩雷提醒", expanded=True):
+                        c_ev, c_av = st.columns(2)
+                        with c_ev:
+                            st.markdown("**📌 可使用的真实依据**"
+                                        "<span style='color:#90A4AE;font-size:0.8em'>（仅限已提供信息）</span>",
+                                        unsafe_allow_html=True)
+                            for item in evidence.get("真实依据", []):
+                                is_missing = ("缺少" in item or "暂无" in item)
+                                if is_missing:
+                                    st.markdown(f"<div style='background:#FAFAFA;border:1px dashed #BDBDBD;"
+                                                f"border-radius:4px;padding:6px 10px;color:#9E9E9E;"
+                                                f"font-size:0.85em;margin-bottom:4px'>🚫 {item}</div>",
+                                                unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"<div style='background:#F1F8E9;border-left:3px solid #43A047;"
+                                                f"border-radius:4px;padding:6px 10px;color:#33691E;"
+                                                f"font-size:0.85em;margin-bottom:4px'>✅ {item}</div>",
+                                                unsafe_allow_html=True)
+                        with c_av:
+                            st.markdown("**⚠️ 本次沟通注意避免**")
+                            for item in evidence.get("注意避免", []):
+                                st.markdown(f"<div style='background:#FFEBEE;border-left:3px solid #E53935;"
+                                            f"border-radius:4px;padding:6px 10px;color:#B71C1C;"
+                                            f"font-size:0.85em;margin-bottom:4px'>❌ {item}</div>",
+                                            unsafe_allow_html=True)
+
+                # ====== 四、家长沟通话术 ======
+                with st.expander("💬 四、家长沟通话术", expanded=True):
                     script_text = result.get("话术", "")
                     st.text_area(
                         "话术（可编辑后复制）",
@@ -700,8 +785,40 @@ with tab2:
                         label_visibility="collapsed"
                     )
 
-                # ====== 四、行动方案 ======
-                with st.expander("📋 四、行动方案", expanded=False):
+                # ====== 五、家长回应分支 ======
+                branches = result.get("回应分支", [])
+                if branches:
+                    with st.expander(f"🔄 五、如果家长这样回应（预判{len(branches)}种方向）", expanded=False):
+                        BRANCH_COLORS = ["#43A047", "#F9A825", "#E53935", "#1E88E5"]
+                        BRANCH_ICONS = ["🟢", "🟡", "🔴", "🔵"]
+                        for i, b in enumerate(branches):
+                            color = BRANCH_COLORS[i % len(BRANCH_COLORS)]
+                            icon = BRANCH_ICONS[i % len(BRANCH_ICONS)]
+                            title = b.get("标题", f"情况{chr(65 + i)}")
+                            st.markdown(
+                                f"<span style='background:{color};color:white;padding:2px 12px;"
+                                f"border-radius:10px;font-size:0.85em;font-weight:600'>{icon} {title}</span>",
+                                unsafe_allow_html=True)
+                            bc1, bc2 = st.columns(2)
+                            with bc1:
+                                st.markdown("**家长可能回应**")
+                                st.markdown(f"<div style='background:#F5F5F5;border-radius:4px;"
+                                            f"padding:8px 12px;color:#455A64;font-size:0.88em;"
+                                            f"font-style:italic'>💬 {b.get('家长可能回应', '-')}</div>",
+                                            unsafe_allow_html=True)
+                            with bc2:
+                                st.markdown("**老师推荐回应**")
+                                st.markdown(f"<div style='background:#E3F2FD;border-left:3px solid #1E88E5;"
+                                            f"border-radius:4px;padding:8px 12px;color:#0D47A1;"
+                                            f"font-size:0.88em'>👨‍🏫 {b.get('老师推荐回应', '-')}</div>",
+                                            unsafe_allow_html=True)
+                            st.caption(f"🎯 沟通目的：{b.get('沟通目的', '-')}")
+                            if i < len(branches) - 1:
+                                st.markdown("<div style='border-top:1px dashed #E0E0E0;margin:8px 0'></div>",
+                                            unsafe_allow_html=True)
+
+                # ====== 六、行动方案 ======
+                with st.expander("📋 六、行动方案", expanded=False):
                     actions = result.get("行动方案", {})
                     cols = st.columns(2)
                     with cols[0]:
