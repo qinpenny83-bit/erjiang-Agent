@@ -21,7 +21,7 @@ st.caption("AI驱动学情洞察、家校沟通与学员运营，提升服务效
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 学情续费预警系统",
     "💬 家校沟通策略助手",
-    "📋 AI学情风险洞察中心",
+    "📋 风险优先处理中心",
     "📈 数据看板"
 ])
 
@@ -1233,7 +1233,7 @@ def _trend_short(trend: dict) -> str:
 
 
 # ============================================================
-# Tab 3: AI学情风险洞察中心
+# Tab 3: 风险优先处理中心
 # ============================================================
 with tab3:
     st.markdown("""
@@ -1245,7 +1245,7 @@ with tab3:
         max-width: 640px;
     ">
         <span style="color: #5c6bc0; font-size: 14px; font-weight: 500;">
-            📋 上传行课数据Excel：自动识别讲次与字段 → 数据质量校验 → 5维风险分析 → P1-P4排序 → AI解释风险原因 → 近期趋势判断 → 定位问题讲次 → 生成学情风险报告
+            📋 风险优先处理中心：上传行课Excel → 风险分析与P1-P4排序 → AI解释风险原因 → 跟进建议 → 生成沟通方案 → 记录跟进结果 → AI判断下一步 → 最新数据重新评估（闭环）
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -1323,10 +1323,10 @@ with tab3:
                 key="lecture_report_mode"
             )
 
-            # ===== 风险分析&沟通优先级（AI学情风险洞察中心）=====
+            # ===== 风险优先处理中心（风险分析&跟进闭环）=====
             if report_mode == "⚠️ 风险分析&沟通优先级":
-                st.markdown("**⚠️ 学员风险分析与沟通优先级**")
-                st.caption(f"基于5维指标（有效听课·听课时长·答题正确率·练习提交·练习得分）对 {len(df)} 名学员进行风险排序")
+                st.markdown("**⚠️ 风险优先处理中心**")
+                st.caption(f"基于5维指标（有效听课·听课时长·答题正确率·练习提交·练习得分）对 {len(df)} 名学员进行风险排序 → AI解释原因 → 跟进建议 → 沟通方案 → 跟进记录 → 重新评估")
 
                 # ---- 第0步：数据质量校验（上传后自动，先于风险分析）----
                 from core.risk_insight_engine import validate_data_quality, build_all_insights
@@ -1369,6 +1369,13 @@ with tab3:
                         elapsed = time.time() - start_time
                         progress_text.text(f"✅ 风险分析完成！{len(results)} 名学员，耗时 {elapsed:.1f} 秒")
 
+                        # 数据回流入口：记录风险快照（重新分析时自动对比风险变化，更新跟进状态）
+                        try:
+                            from core.risk_followup_center import RiskFollowupStore
+                            RiskFollowupStore().snapshot_risk(results)
+                        except Exception as _snap_ex:
+                            print(f"[RiskCenter] 风险快照记录失败(不影响分析): {_snap_ex}")
+
                         # 预生成导出Excel
                         output_filename = f"风险分析_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
                         output_path = os.path.join(OUTPUT_DIR, output_filename)
@@ -1398,6 +1405,54 @@ with tab3:
                     elapsed = st.session_state.get("lec_risk_elapsed", 0)
                     insight_map = {i["name"]: i for i in insights}
                     result_map = {r["学员姓名"]: r for r in results}
+
+                    # ===== 跟进闭环状态加载（规则层，零LLM）=====
+                    from core.risk_followup_center import (
+                        RiskFollowupStore, compute_funnel, build_task_list,
+                        STATUS_META, status_display, default_status_for, STATUS_ORDER,
+                        STATUS_PENDING, suggest_next_action, rule_followup_judgment,
+                        risk_change_label, FU_METHODS, FU_RESULTS,
+                    )
+                    _rfu_store = RiskFollowupStore()
+                    _rfu_states = _rfu_store.load()
+
+                    # ===== 0. 🔁 今日风险处理（闭环进度漏斗）=====
+                    st.subheader("🔁 今日风险处理")
+                    _funnel = compute_funnel(results, _rfu_states)
+                    _funnel_items = [
+                        ("待联系", _funnel["待联系"], "#C62828"),
+                        ("已联系·待观察", _funnel["已联系·待观察"], "#F9A825"),
+                        ("已完成跟进", _funnel["已完成跟进"], "#2E7D32"),
+                        ("风险缓解", _funnel["风险缓解"], "#1565C0"),
+                    ]
+                    _fbox = []
+                    for _fi, (_fl, _fc, _fcol) in enumerate(_funnel_items):
+                        if _fi:
+                            _fbox.append('<div style="color:#90A4AE;font-size:16px;align-self:center;">→</div>')
+                        _fbox.append(
+                            '<div style="flex:1;min-width:110px;border:1px solid #e8eaf0;border-radius:6px;'
+                            'padding:6px 10px;text-align:center;background:#ffffff;">'
+                            f'<div style="font-size:22px;font-weight:700;color:{_fcol};">{_fc}</div>'
+                            f'<div style="font-size:12px;color:#555;">{_fl}</div></div>')
+                    st.markdown('<div style="display:flex;gap:8px;align-items:stretch;flex-wrap:wrap;">'
+                                + "".join(_fbox) + '</div>', unsafe_allow_html=True)
+                    st.caption("闭环：AI发现风险 → 跟进建议 → 生成沟通方案 → 老师联系 → 记录结果 → AI判断下一步 → 最新数据重新评估 → TOP10与状态自动更新")
+
+                    # ===== 0.5. 📌 今日待处理 =====
+                    _rfu_tasks = build_task_list(results, insights, _rfu_states)
+                    if _rfu_tasks:
+                        with st.container(border=True):
+                            st.markdown(f"**📌 今日待处理（{_rfu_tasks.__len__()}项）**　"
+                                        "<span style='color:#888;font-size:12px;'>按紧急度排序，点击学员进入风险处理卡</span>")
+                            _task_cols = st.columns(2)
+                            for _ti, _tk in enumerate(_rfu_tasks):
+                                with _task_cols[_ti % 2]:
+                                    if st.button(f"{_tk['name']}｜{_tk['tag']}",
+                                                 key=f"rfu_task_{_ti}", use_container_width=True):
+                                        st.session_state["lec_detail_sel"] = _tk["name"]
+                                        st.rerun()
+                    else:
+                        st.success("今日暂无待处理风险任务，继续保持。")
 
                     # ===== 1. 📊 数据分析概览 =====
                     st.subheader("📊 数据分析概览")
@@ -1446,6 +1501,13 @@ with tab3:
                             _type_str = "🟢暂无明显风险"
                         _ts = _trend_short(_ins_c["trend"]) if _ins_c else "？数据不足"
                         _tc = _conclusion_color(_ins_c["trend"]["summary_symbol"]) if _ins_c else "#607D8B"
+                        # 跟进状态徽章（默认按数据判断：P1-P3待联系/P4暂不需要跟进）
+                        _rec_c = _rfu_states.get(r["学员姓名"]) or {}
+                        _stts_c = _rec_c.get("status") or default_status_for(r["优先级"])
+                        _sm_c = STATUS_META.get(_stts_c, STATUS_META[STATUS_PENDING])
+                        _stts_chip = (f'<span style="background:{_sm_c["color"]}1A;color:{_sm_c["color"]};'
+                                      f'border:1px solid {_sm_c["color"]};border-radius:3px;'
+                                      f'padding:1px 6px;font-size:11px;">{_sm_c["icon"]}{_stts_c}</span>')
                         _cards.append(
                             '<div style="flex:1 1 300px;min-width:280px;border:1px solid #e8eaf0;'
                             f'border-left:4px solid {_pc};border-radius:6px;padding:8px 12px;background:#ffffff;">'
@@ -1454,13 +1516,19 @@ with tab3:
                             f'<span style="background:{_pc};color:#fff;border-radius:3px;padding:1px 6px;font-size:11px;">{r["优先级"]}</span> '
                             f'<span style="color:#555;font-size:12px;">风险分{r["风险分"]}</span> '
                             f'<span style="color:#333;font-size:12px;">{_esc_html(_type_str)}</span> '
-                            f'<span style="color:{_tc};font-weight:600;font-size:12px;">{_esc_html(_ts)}</span>'
+                            f'<span style="color:{_tc};font-weight:600;font-size:12px;">{_esc_html(_ts)}</span> '
+                            f'{_stts_chip}'
                             '</div>'
                         )
                     st.markdown('<div style="display:flex;flex-wrap:wrap;gap:8px;">' + "".join(_cards) + '</div>', unsafe_allow_html=True)
 
                     # ===== 3. 📋 学员风险明细 =====
                     st.subheader("📋 学员风险明细")
+
+                    def _fu_status_of(_n, _p):
+                        _rec_x = _rfu_states.get(_n) or {}
+                        return status_display(_rec_x.get("status") or default_status_for(_p))
+
                     display_df = pd.DataFrame([
                         {
                             "排名": r["排名"],
@@ -1476,6 +1544,7 @@ with tab3:
                                          if r["学员姓名"] in insight_map and insight_map[r["学员姓名"]].get("risk_type")
                                          else "🟢暂无明显风险"),
                             "近期趋势": _trend_short(insight_map[r["学员姓名"]]["trend"]) if r["学员姓名"] in insight_map else "？数据不足",
+                            "跟进状态": _fu_status_of(r["学员姓名"], r["优先级"]),
                         }
                         for r in results
                     ])
@@ -1546,14 +1615,15 @@ with tab3:
 </div>
 """, unsafe_allow_html=True)
 
-                    # ===== 5+6. 📈 近期趋势 & 🔎 问题讲次定位 =====
-                    st.subheader("📈 近期趋势 & 🔎 问题讲次定位")
-                    st.caption("选择学员查看：5维近期趋势（↗上升 →稳定 ↘下降 ⚠️波动 ？数据不足）+ 具体问题讲次（讲次+异常指标+真实数据）")
+                    # ===== 5+6. 🗂️ 风险处理卡（当前风险→AI诊断→跟进建议→沟通方案→跟进记录→AI判断→风险变化）=====
+                    st.subheader("🗂️ 风险处理卡")
+                    st.caption("选择学员：①查看风险与趋势 → ②AI诊断原因 → ③跟进建议 → ④生成沟通方案 → ⑤记录跟进结果 → ⑥AI判断下一步 → ⑦风险状态变化")
                     sel_name = st.selectbox("选择学员", [r["学员姓名"] for r in results], key="lec_detail_sel")
                     _ins = insight_map.get(sel_name)
                     _res = result_map.get(sel_name)
                     if _ins and _res:
                         _t = _ins["trend"]
+                        st.markdown("**① 当前风险**（P1-P4与风险分由系统规则判定，AI仅解释不修改；趋势时间优先：最新讲次优先）")
                         _rt_color = _risk_type_color(_ins["risk_type"]) if _ins.get("risk_type") else "#2E7D32"
                         _sel_h = _esc_html(sel_name)
                         _pr2_c = _priority_color(_ins["priority"])
@@ -1612,6 +1682,162 @@ with tab3:
 <div><b>趋势结论：</b>{_tcn_h}</div>
 </div>
 """, unsafe_allow_html=True)
+
+                        # ---- ② 🔍 AI风险诊断（真实数据组装，零编造）----
+                        st.markdown("**② 🔍 AI风险诊断**（为什么这个学员需要关注）")
+                        _chg_lines = []
+                        for _d, _td in _t["dims"].items():
+                            if _td["trend"] in ("下降", "上升", "波动"):
+                                _chg_lines.append(f"{_d}{_td['symbol']}（{_td['detail']}）")
+                        _key_change = "；".join(_chg_lines) if _chg_lines else f"各维度暂无明显变化（{_t['conclusion']}）"
+                        if _ins["inconsistency"].get("inconsistent"):
+                            _cur_judge = _ins["inconsistency"]["message"]
+                        elif len(_t.get("no_data", [])) >= 4:
+                            _cur_judge = "数据不足，建议人工确认（多数维度缺少有效数据）"
+                        else:
+                            _cur_judge = _t["conclusion"]
+                        _diag_core = (f"{_ins['risk_icon']}{_ins['risk_type']}（触发：{'、'.join(_ins['risk_triggers'])}）"
+                                      if _ins.get("risk_type") else "暂无明显风险（5维指标未触发风险规则）")
+                        _diag_evidence = (f"5维指标：{_ins['metrics_brief']}；异常：{_ins['anomalies_brief']}；"
+                                          f"问题讲次共{_ins['problem_count']}项")
+                        st.markdown(f"""
+<div style="border:1px solid #e8eaf0;border-left:4px solid #1565C0;border-radius:6px;padding:10px 14px;margin:6px 0;background:#fff;font-size:13px;line-height:1.8;">
+<div><b>核心风险：</b>{_esc_html(_diag_core)}</div>
+<div><b>关键变化：</b>{_esc_html(_key_change)}</div>
+<div><b>当前判断：</b>{_esc_html(_cur_judge)}</div>
+<div><b>风险证据：</b>{_esc_html(_diag_evidence)}</div>
+</div>
+""", unsafe_allow_html=True)
+
+                        # ---- ③ 🎯 建议跟进动作（规则版，零LLM）----
+                        st.markdown("**③ 🎯 建议跟进动作**（风险是什么 → 为什么 → 老师现在应该做什么）")
+                        _rec_sel = _rfu_states.get(sel_name) or {}
+                        _next_act = suggest_next_action(_ins, _rec_sel)
+                        _focus_html = "".join(
+                            f"<div>{_fi + 1}. {_esc_html(_fp)}</div>"
+                            for _fi, _fp in enumerate(_next_act["focus_points"]))
+                        st.markdown(f"""
+<div style="border:1px solid #e8eaf0;border-left:4px solid {_next_act["urgency_color"]};border-radius:6px;padding:10px 14px;margin:6px 0;background:#fafafa;font-size:13px;line-height:1.8;">
+<div><b>建议：</b>{_esc_html(_next_act["action"])}　<span style="background:{_next_act["urgency_color"]};color:#fff;border-radius:3px;padding:1px 8px;font-size:11px;">跟进优先级 {_next_act["urgency"]}</span></div>
+<div><b>建议重点：</b></div>{_focus_html}
+<div style="color:#888;font-size:12px;">判断依据：{_esc_html(_next_act["basis"])}（全部来自真实数据）</div>
+</div>
+""", unsafe_allow_html=True)
+
+                        # ---- ④ ☎️ 生成沟通方案（AI按需调用）----
+                        st.markdown("**④ ☎️ 沟通方案**（开场/核心沟通/家长可能反馈/老师应对/收尾；真人沟通感，全部基于真实数据）")
+                        if st.button("☎️ 生成沟通方案", key="lec_plan_btn", type="primary"):
+                            from core.ai_comm_plan import generate_comm_plan
+                            with st.spinner("AI正在生成沟通方案（5模块完整性校验，失败自动降级规则版）..."):
+                                _plan_txt = generate_comm_plan(_ins, _rec_sel, ai_map.get(sel_name))
+                            st.session_state["lec_plan_content"] = _plan_txt
+                            st.session_state["lec_plan_name"] = sel_name
+                            st.rerun()
+                        _plan_shown = st.session_state.get("lec_plan_content")
+                        if _plan_shown and st.session_state.get("lec_plan_name") == sel_name:
+                            st.markdown(_plan_shown)
+                            _safe_pn = re.sub(r'[\\/:*?"<>|]', '', sel_name)
+                            st.download_button("📥 下载沟通方案（TXT）", data=_plan_shown.encode("utf-8"),
+                                               file_name=f"沟通方案_{_safe_pn}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                                               mime="text/plain", key="lec_plan_dl")
+
+                        # ---- ⑤ ✅ 记录本次跟进（含跟进状态与手动更新）----
+                        _stts_cur = _rec_sel.get("status") or default_status_for(_ins["priority"])
+                        _sm_cur = STATUS_META.get(_stts_cur, STATUS_META[STATUS_PENDING])
+                        st.markdown(f"**⑤ ✅ 记录本次跟进**　当前跟进状态："
+                                    f"<span style='background:{_sm_cur['color']}1A;color:{_sm_cur['color']};"
+                                    f"border:1px solid {_sm_cur['color']};border-radius:3px;"
+                                    f"padding:1px 8px;font-size:12px;'>{_sm_cur['icon']} {_stts_cur}</span>",
+                                    unsafe_allow_html=True)
+                        if _rec_sel.get("last_followup_at"):
+                            _last_fu = (f"最后跟进：{_rec_sel['last_followup_at']}"
+                                        f"（{_rec_sel.get('followup_method') or '未记录'}｜{_rec_sel.get('followup_result') or '未记录'}）")
+                            if _rec_sel.get("next_followup_date"):
+                                _last_fu += f"｜下次跟进：{_rec_sel['next_followup_date']}"
+                            st.caption(_last_fu)
+                        with st.expander("✅ 记录本次跟进（完成电话/微信沟通后填写，保存后立即生成AI跟进判断）", expanded=False):
+                            _fu_m = st.selectbox("跟进方式", FU_METHODS, key=f"fu3_method_{sel_name}")
+                            _fu_r = st.selectbox("跟进结果", FU_RESULTS, key=f"fu3_result_{sel_name}")
+                            _fu_fb = st.text_area("家长反馈", key=f"fu3_feedback_{sel_name}", height=80,
+                                                  placeholder="请输入本次沟通后的真实反馈……")
+                            _fu_nt = st.text_area("老师备注（选填）", key=f"fu3_note_{sel_name}", height=60)
+                            _fu_nd_def = _rec_sel.get("next_followup_date")
+                            _fu_nd_val = None
+                            if _fu_nd_def:
+                                try:
+                                    _fu_nd_val = datetime.strptime(_fu_nd_def, "%Y-%m-%d").date()
+                                except ValueError:
+                                    _fu_nd_val = None
+                            _fu_nd = st.date_input("下次跟进时间", value=_fu_nd_val, key=f"fu3_next_{sel_name}")
+                            _c_save, _c_sts = st.columns(2)
+                            with _c_save:
+                                if st.button("💾 保存跟进记录", key=f"fu3_save_{sel_name}", type="primary", use_container_width=True):
+                                    _j = rule_followup_judgment(_fu_m, _fu_r, _fu_fb, _fu_nt, _ins)
+                                    try:
+                                        _rfu_store.record_followup(
+                                            sel_name, _fu_m, _fu_r, _fu_fb, _fu_nt,
+                                            _fu_nd.strftime("%Y-%m-%d"), _ins["risk_score"], _ins["priority"],
+                                            new_status=_j["new_status"])
+                                        st.session_state["lec_fu_judgment"] = {
+                                            "name": sel_name, "method": _fu_m, "result": _fu_r,
+                                            "feedback": _fu_fb, "note": _fu_nt}
+                                        st.rerun()
+                                    except Exception as _fu_ex:
+                                        st.error(f"保存失败：{_fu_ex}")
+                            with _c_sts:
+                                _stts_manual = st.selectbox("手动更新跟进状态", STATUS_ORDER,
+                                                            index=STATUS_ORDER.index(_stts_cur),
+                                                            key=f"fu3_stts_{sel_name}")
+                                if st.button("🔄 仅更新状态", key=f"fu3_stts_btn_{sel_name}", use_container_width=True):
+                                    if _rfu_store.update_status(sel_name, _stts_manual):
+                                        st.rerun()
+
+                        # ---- ⑥ 🤖 AI跟进判断（保存后立即显示，规则版零延迟 + 可选AI深度判断）----
+                        _fuj = st.session_state.get("lec_fu_judgment")
+                        if _fuj and _fuj.get("name") == sel_name:
+                            st.markdown("**⑥ 🤖 AI跟进判断**（基于本次跟进真实反馈 + 学情数据，无数据不下结论）")
+                            _rule_j = rule_followup_judgment(_fuj["method"], _fuj["result"],
+                                                             _fuj["feedback"], _fuj["note"], _ins)
+                            st.markdown(f"""
+<div style="border:1px solid #e8eaf0;border-left:4px solid #F9A825;border-radius:6px;padding:10px 14px;margin:6px 0;background:#fff;font-size:13px;line-height:1.8;">
+<div><b>当前状态：</b>{_esc_html(_rule_j["state_label"])}</div>
+<div><b>AI判断：</b>{_esc_html(_rule_j["judgment"])}</div>
+<div><b>下一步：</b>{_esc_html(_rule_j["next_step"])}</div>
+<div style="color:#888;font-size:12px;">建议下次跟进日期：{_rule_j["suggest_next_date"]}（可在上方表单中调整）</div>
+</div>
+""", unsafe_allow_html=True)
+                            _ai_j_shown = st.session_state.get("lec_fuj_ai")
+                            if _ai_j_shown and _ai_j_shown.get("name") == sel_name:
+                                st.markdown("**🤖 AI深度判断**（结合家长真实反馈的深度分析）")
+                                st.markdown(_ai_j_shown["text"])
+                            else:
+                                if st.button("🤖 AI深度判断（结合家长反馈深度分析）", key="lec_fuj_ai_btn"):
+                                    from core.ai_comm_plan import generate_followup_judgment
+                                    with st.spinner("AI正在深度分析（3模块校验，失败自动降级规则版）..."):
+                                        _ai_j = generate_followup_judgment(
+                                            _fuj["method"], _fuj["result"], _fuj["feedback"], _fuj["note"],
+                                            _ins, _rec_sel)
+                                    st.session_state["lec_fuj_ai"] = {"name": sel_name, "text": _ai_j}
+                                    st.rerun()
+
+                        # ---- ⑦ 📉 风险状态变化（跟进前 → 重新分析后自动对比）----
+                        st.markdown("**⑦ 📉 风险状态变化**（跟进后上传最新行课数据重新分析，系统自动对比风险变化）")
+                        _chg = risk_change_label(_rec_sel, _ins["risk_score"])
+                        st.markdown(f"""
+<div style="border:1px solid {_chg["color"]}66;border-left:4px solid {_chg["color"]};border-radius:6px;padding:10px 14px;margin:6px 0;background:#fff;font-size:13px;line-height:1.8;">
+<div><b>{_chg["icon"]} {_esc_html(_chg["label"])}</b></div>
+<div style="color:#555;">{_esc_html(_chg["detail"])}</div>
+</div>
+""", unsafe_allow_html=True)
+                        if _rec_sel.get("risk_history"):
+                            _tl = " → ".join(f"{_h['risk_score']:.0f}分({str(_h['priority']).split('-')[0]})"
+                                             for _h in _rec_sel["risk_history"][-5:])
+                            st.caption(f"分析快照：{_tl}")
+                        if _rec_sel.get("history"):
+                            with st.expander(f"📜 跟进记录（共{len(_rec_sel['history'])}次）"):
+                                for _h in reversed(_rec_sel["history"][-5:]):
+                                    _h_fb = f"｜反馈：{_h['feedback']}" if _h.get("feedback") else ""
+                                    st.markdown(f"- [{_h['time']}] {_h['method']}｜{_h['result']}{_h_fb}")
 
                     # ===== 7. 📄 AI学情风险报告（单个学员）=====
                     st.subheader("📄 AI学情风险报告（单个学员）")
