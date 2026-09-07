@@ -21,7 +21,7 @@ st.caption("AI驱动学情洞察、家校沟通与学员运营，提升服务效
 tab1, tab2, tab3, tab4 = st.tabs([
     "📊 学情续费预警系统",
     "💬 家校沟通策略助手",
-    "📋 行课数据风险分析&批量报告生成",
+    "📋 AI学情风险洞察中心",
     "📈 数据看板"
 ])
 
@@ -1168,7 +1168,72 @@ with tab2:
 
 
 # ============================================================
-# Tab 3: 行课数据风险分析&批量报告生成
+# Tab 3: AI学情风险洞察中心（渲染辅助函数）
+# ============================================================
+_CIRCLED_NUM = "①②③④⑤⑥⑦⑧⑨⑩"
+
+
+def _esc_html(s) -> str:
+    """HTML转义（AI输出内容插入HTML卡片前必须转义）"""
+    import html as _h
+    return _h.escape(str(s))
+
+
+def _conclusion_color(symbol: str) -> str:
+    """趋势结论颜色"""
+    if symbol == "↘":
+        return "#C62828"
+    if symbol == "↗":
+        return "#2E7D32"
+    if symbol == "⚠️":
+        return "#E65100"
+    return "#607D8B"
+
+
+def _priority_color(priority: str) -> str:
+    """P1-P4优先级颜色"""
+    if "P1" in str(priority):
+        return "#C62828"
+    if "P2" in str(priority):
+        return "#E65100"
+    if "P3" in str(priority):
+        return "#F9A825"
+    return "#2E7D32"
+
+
+def _risk_type_color(risk_type: str) -> str:
+    """风险类型颜色"""
+    return {
+        "参与度风险": "#C62828",
+        "练习执行风险": "#E65100",
+        "学习效果风险": "#F9A825",
+        "趋势变化风险": "#1565C0",
+        "数据异常/待确认": "#757575",
+    }.get(str(risk_type), "#2E7D32")
+
+
+def _trend_short(trend: dict) -> str:
+    """趋势短标签（TOP10卡片/明细表用），基于规则层真实判断结果"""
+    if not trend:
+        return "？数据不足"
+    s = trend.get("summary_symbol", "？")
+    if len(trend.get("declining", [])) >= 2:
+        return f"{s} 多维下降"
+    if trend.get("patterns", {}).get("持续下降"):
+        return f"{s} 持续下降"
+    if trend.get("declining"):
+        return f"{s} 下降"
+    if trend.get("volatile"):
+        return f"{s} 波动"
+    if s == "？":
+        return "？数据不足"
+    if s == "↗":
+        return f"{s} 稳定回升"
+    return f"{s} 整体稳定"
+
+
+# ============================================================
+# Tab 3: AI学情风险洞察中心
 # ============================================================
 with tab3:
     st.markdown("""
@@ -1177,10 +1242,10 @@ with tab3:
         padding: 10px 18px;
         border-radius: 6px;
         margin-bottom: 4px;
-        max-width: 580px;
+        max-width: 640px;
     ">
         <span style="color: #5c6bc0; font-size: 14px; font-weight: 500;">
-            📋 上传行课数据Excel，系统自动识别讲次列，进行5维风险分析（有效听课·答题正确率·练习提交·练习得分·听课时长），按P1-P4优先级排序，并支持批量报告生成。
+            📋 上传行课数据Excel：自动识别讲次与字段 → 数据质量校验 → 5维风险分析 → P1-P4排序 → AI解释风险原因 → 近期趋势判断 → 定位问题讲次 → 生成学情风险报告
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -1242,6 +1307,14 @@ with tab3:
             else:
                 st.warning("⚠️ 未识别到讲次列，将使用基础分析模式")
 
+            # 文件变更时清空风险洞察缓存（结果/洞察/AI分析/报告）
+            _file_identity3 = uploaded_file3.name + str(len(df))
+            if st.session_state.get("lec_risk_file_identity") != _file_identity3:
+                for _k in list(st.session_state.keys()):
+                    if _k.startswith("lec_risk_") or _k.startswith("lec_rpt_") or _k == "lec_detail_sel":
+                        st.session_state.pop(_k, None)
+                st.session_state["lec_risk_file_identity"] = _file_identity3
+
             # 模式切换
             report_mode = st.radio(
                 "选择功能",
@@ -1250,25 +1323,89 @@ with tab3:
                 key="lecture_report_mode"
             )
 
-            # ===== 风险分析&沟通优先级 =====
+            # ===== 风险分析&沟通优先级（AI学情风险洞察中心）=====
             if report_mode == "⚠️ 风险分析&沟通优先级":
-                st.markdown("**⚠️ 学员沟通优先级分析**")
+                st.markdown("**⚠️ 学员风险分析与沟通优先级**")
                 st.caption(f"基于5维指标（有效听课·听课时长·答题正确率·练习提交·练习得分）对 {len(df)} 名学员进行风险排序")
 
-                if st.button("🔍 开始风险分析", type="primary", use_container_width=True):
-                    from core.lecture_risk_analyzer import batch_analyze_risk, export_risk_excel, batch_generate_scripts
+                # ---- 第0步：数据质量校验（上传后自动，先于风险分析）----
+                from core.risk_insight_engine import validate_data_quality, build_all_insights
+                quality = validate_data_quality(df, lectures, name_col)
 
-                    progress_text = st.empty()
-                    progress_bar = st.progress(0)
+                if quality["errors"]:
+                    for _err in quality["errors"]:
+                        st.error(f"⛔ {_err}，请检查Excel后重新上传")
+                else:
+                    _n_warn = len(quality["warnings"])
+                    with st.expander(f"🧪 数据质量校验（{_n_warn}项提示）", expanded=False):
+                        st.table(pd.DataFrame([
+                            {"维度": _d, "讲次覆盖率": f"{_v['lecture_coverage']:.0%}",
+                             "无数据学员": f"{_v['missing_students']}/{quality['student_count']}",
+                             "参与判断": "✅ 是" if _v["usable"] else "⚠️ 否（数据不足）"}
+                            for _d, _v in quality["dims"].items()
+                        ]))
+                        if _n_warn:
+                            for _w in quality["warnings"]:
+                                st.markdown(f"⚠️ {_w}")
+                        else:
+                            st.markdown("✅ 5维指标数据完整，全部参与风险判断。")
 
-                    start_time = time.time()
-                    results = batch_analyze_risk(
-                        df, lectures, attendance_rates,
-                        name_col=name_col, id_col=id_col,
-                        progress_callback=lambda cur, total: progress_bar.progress(cur / total)
-                    )
-                    elapsed = time.time() - start_time
-                    progress_text.text(f"✅ 风险分析完成！{len(results)} 名学员，耗时 {elapsed:.1f} 秒")
+                if not quality["errors"]:
+                    if st.button("🔍 开始风险分析", type="primary", use_container_width=True):
+                        from core.lecture_risk_analyzer import batch_analyze_risk, export_risk_excel
+
+                        progress_text = st.empty()
+                        progress_bar = st.progress(0)
+                        start_time = time.time()
+
+                        with st.spinner("正在进行5维风险分析与P1-P4排序..."):
+                            results = batch_analyze_risk(
+                                df, lectures, attendance_rates,
+                                name_col=name_col, id_col=id_col,
+                                progress_callback=lambda cur, total: progress_bar.progress(cur / total)
+                            )
+                        progress_text.text("正在生成风险洞察（规则层：风险类型·近期趋势·问题讲次，零AI调用）...")
+                        insights = build_all_insights(results, lectures)
+                        elapsed = time.time() - start_time
+                        progress_text.text(f"✅ 风险分析完成！{len(results)} 名学员，耗时 {elapsed:.1f} 秒")
+
+                        # 预生成导出Excel
+                        output_filename = f"风险分析_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+                        output_path = os.path.join(OUTPUT_DIR, output_filename)
+                        os.makedirs(OUTPUT_DIR, exist_ok=True)
+                        export_risk_excel(results, lectures, attendance_rates, output_path, df)
+
+                        st.session_state["lec_risk_results"] = results
+                        st.session_state["lec_risk_insights"] = insights
+                        st.session_state["lec_risk_quality"] = quality
+                        st.session_state["lec_risk_elapsed"] = elapsed
+                        st.session_state["lec_risk_export_path"] = output_path
+                        st.session_state["lec_risk_export_filename"] = output_filename
+                        st.session_state.pop("lec_risk_ai_insights", None)
+                        st.session_state.pop("lec_rpt_content", None)
+                        st.session_state.pop("lec_rpt_content_name", None)
+                        st.session_state.pop("lec_detail_sel", None)
+                        st.session_state.pop("lec_rpt_student", None)
+                        log_event("analysis_end", {"student_count": len(df), "duration_s": round(elapsed, 2)})
+                        st.rerun()
+
+                results = st.session_state.get("lec_risk_results")
+                insights = st.session_state.get("lec_risk_insights") or []
+
+                if not results:
+                    st.info("👆 点击「开始风险分析」，系统将自动完成：数据质量校验 → 5维风险分析 → P1-P4排序 → 风险类型分类 → 近期趋势判断 → 问题讲次定位 → AI风险洞察 → 学情风险报告")
+                else:
+                    elapsed = st.session_state.get("lec_risk_elapsed", 0)
+                    insight_map = {i["name"]: i for i in insights}
+                    result_map = {r["学员姓名"]: r for r in results}
+
+                    # ===== 1. 📊 数据分析概览 =====
+                    st.subheader("📊 数据分析概览")
+                    st.caption(f"✅ 分析完成：{len(results)} 名学员 · {len(lectures)} 个讲次 · 耗时 {elapsed:.1f} 秒（P1-P4由系统规则判定，AI仅解释不修改）")
+
+                    _qual = st.session_state.get("lec_risk_quality") or {}
+                    if _qual.get("warnings"):
+                        st.warning("⚠️ **数据质量提示（相关维度结论需谨慎参考）**\n\n" + "\n".join(f"- {_w}" for _w in _qual["warnings"]))
 
                     # 诊断：展示前3名学员的原始指标
                     with st.expander("🔧 诊断：风险分析原始数据", expanded=False):
@@ -1296,7 +1433,34 @@ with tab3:
                     col4.metric("🟢 P4-低", p4)
                     col5.metric("总计", len(results))
 
-                    st.subheader("风险排序结果")
+                    # ===== 2. 🔥 优先关注TOP10 =====
+                    st.subheader("🔥 优先关注TOP10")
+                    st.caption("按P1-P4和风险分排序，快速锁定最需要关注的学员（在下方明细区选择学员查看完整信息）")
+                    _cards = []
+                    for _idx, r in enumerate(results[:10]):
+                        _ins_c = insight_map.get(r["学员姓名"])
+                        _pc = _priority_color(r["优先级"])
+                        if _ins_c and _ins_c.get("risk_type"):
+                            _type_str = f"{_ins_c['risk_icon']}{_ins_c['risk_type']}"
+                        else:
+                            _type_str = "🟢暂无明显风险"
+                        _ts = _trend_short(_ins_c["trend"]) if _ins_c else "？数据不足"
+                        _tc = _conclusion_color(_ins_c["trend"]["summary_symbol"]) if _ins_c else "#607D8B"
+                        _cards.append(
+                            '<div style="flex:1 1 300px;min-width:280px;border:1px solid #e8eaf0;'
+                            f'border-left:4px solid {_pc};border-radius:6px;padding:8px 12px;background:#ffffff;">'
+                            f'<span style="color:{_pc};font-weight:700;font-size:15px;">{_CIRCLED_NUM[_idx]}</span> '
+                            f'<b style="font-size:14px;">{_esc_html(r["学员姓名"])}</b> '
+                            f'<span style="background:{_pc};color:#fff;border-radius:3px;padding:1px 6px;font-size:11px;">{r["优先级"]}</span> '
+                            f'<span style="color:#555;font-size:12px;">风险分{r["风险分"]}</span> '
+                            f'<span style="color:#333;font-size:12px;">{_esc_html(_type_str)}</span> '
+                            f'<span style="color:{_tc};font-weight:600;font-size:12px;">{_esc_html(_ts)}</span>'
+                            '</div>'
+                        )
+                    st.markdown('<div style="display:flex;flex-wrap:wrap;gap:8px;">' + "".join(_cards) + '</div>', unsafe_allow_html=True)
+
+                    # ===== 3. 📋 学员风险明细 =====
+                    st.subheader("📋 学员风险明细")
                     display_df = pd.DataFrame([
                         {
                             "排名": r["排名"],
@@ -1308,25 +1472,187 @@ with tab3:
                             "练习提交率": r["练习提交率"],
                             "平均得分": r["平均得分"],
                             "问题讲次": r["问题讲次"],
+                            "风险类型": (f"{insight_map[r['学员姓名']]['risk_icon']}{insight_map[r['学员姓名']]['risk_type']}"
+                                         if r["学员姓名"] in insight_map and insight_map[r["学员姓名"]].get("risk_type")
+                                         else "🟢暂无明显风险"),
+                            "近期趋势": _trend_short(insight_map[r["学员姓名"]]["trend"]) if r["学员姓名"] in insight_map else "？数据不足",
                         }
                         for r in results
                     ])
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-                    st.subheader("导出结果")
-                    output_filename = f"风险分析_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-                    output_path = os.path.join(OUTPUT_DIR, output_filename)
-                    os.makedirs(OUTPUT_DIR, exist_ok=True)
-                    export_risk_excel(results, lectures, attendance_rates, output_path, df)
-                    with open(output_path, "rb") as f:
+                    # ===== 4. 🔍 AI风险洞察 =====
+                    st.subheader("🔍 AI风险洞察")
+                    _top_ins = [i for i in insights if "P1" in i["priority"] or "P2" in i["priority"]][:15]
+                    _top_names = {i["name"] for i in _top_ins}
+                    _incons_ins = [i for i in insights if i["inconsistency"].get("inconsistent") and i["name"] not in _top_names][:5]
+                    _ai_targets = _top_ins + _incons_ins
+                    _n_calls = (len(_ai_targets) + 4) // 5 if _ai_targets else 0
+
+                    ai_map = st.session_state.get("lec_risk_ai_insights") or {}
+                    if _ai_targets:
+                        _hint = f"对风险最高的{len(_top_ins)}名学员"
+                        if _incons_ins:
+                            _hint += f"及{len(_incons_ins)}名数据异常学员"
+                        _hint += f"进行AI深度分析（约{_n_calls}次模型调用，输出校验数据依据，失败自动降级规则版），其余学员采用规则分析，速度优先"
+                        st.caption(_hint)
+                        if st.button("🤖 开始AI深度分析", key="lec_ai_btn", type="primary"):
+                            from core.ai_risk_insight import generate_batch_insights
+                            _p_bar = st.progress(0)
+                            with st.spinner("AI正在分析重点学员风险原因..."):
+                                ai_map = generate_batch_insights(
+                                    _ai_targets,
+                                    progress_callback=lambda cur, total: _p_bar.progress(cur / total)
+                                )
+                            st.session_state["lec_risk_ai_insights"] = ai_map
+                            st.rerun()
+
+                    if ai_map:
+                        _ai_cnt = sum(1 for v in ai_map.values() if v.get("source") == "ai")
+                        st.caption(f"已生成 {len(ai_map)} 名学员风险洞察（AI深度分析 {_ai_cnt} 名 · 规则兜底 {len(ai_map) - _ai_cnt} 名）")
+                        for _i in _ai_targets:
+                            _a = ai_map.get(_i["name"])
+                            _data = _a if _a else _i["rule_insight"]
+                            _src = _a.get("source", "rule") if _a else "rule"
+                            _tc2 = _risk_type_color(_data.get("主要风险", ""))
+                            _src_tag = "🤖 AI深度分析" if _src == "ai" else "⚙️ 规则分析（真实数据）"
+                            _incons_html = ""
+                            if _i["inconsistency"].get("inconsistent"):
+                                _incons_html = (f'<div style="color:#1565C0;font-size:12px;margin-top:4px;">'
+                                                f'⚖️ {_esc_html(_i["inconsistency"]["message"])}</div>')
+                            _n_h = _esc_html(_i["name"])
+                            _pr_h = _esc_html(_i["priority"])
+                            _pr_c = _priority_color(_i["priority"])
+                            _ts_h = _esc_html(_trend_short(_i["trend"]))
+                            _ts_c = _conclusion_color(_i["trend"]["summary_symbol"])
+                            _risk_h = _esc_html(_data.get("主要风险", ""))
+                            _trig_h = _esc_html(_data.get("触发指标", ""))
+                            _expl_h = _esc_html(_data.get("风险解释", ""))
+                            _foc_h = _esc_html(_data.get("建议关注", ""))
+                            st.markdown(f"""
+<div style="border:1px solid #e8eaf0;border-left:4px solid {_tc2};border-radius:6px;padding:10px 14px;margin:6px 0;background:#fff;">
+<div style="margin-bottom:4px;"><b style="font-size:14px;">{_n_h}</b>
+<span style="background:{_pr_c};color:#fff;border-radius:3px;padding:1px 6px;font-size:11px;">{_pr_h}</span>
+<span style="color:#555;font-size:12px;">风险分{_i["risk_score"]}</span>
+<span style="color:{_tc2};font-weight:600;font-size:12px;">{_risk_h}</span>
+<span style="color:{_ts_c};font-size:12px;">{_ts_h}</span>
+<span style="color:#999;font-size:11px;float:right;">{_src_tag}</span></div>
+<div style="font-size:12.5px;color:#333;line-height:1.7;">
+<div>触发指标：{_trig_h}</div>
+<div>风险解释：{_expl_h}</div>
+<div>建议关注：{_foc_h}</div>
+</div>
+{_incons_html}
+</div>
+""", unsafe_allow_html=True)
+
+                    # ===== 5+6. 📈 近期趋势 & 🔎 问题讲次定位 =====
+                    st.subheader("📈 近期趋势 & 🔎 问题讲次定位")
+                    st.caption("选择学员查看：5维近期趋势（↗上升 →稳定 ↘下降 ⚠️波动 ？数据不足）+ 具体问题讲次（讲次+异常指标+真实数据）")
+                    sel_name = st.selectbox("选择学员", [r["学员姓名"] for r in results], key="lec_detail_sel")
+                    _ins = insight_map.get(sel_name)
+                    _res = result_map.get(sel_name)
+                    if _ins and _res:
+                        _t = _ins["trend"]
+                        _rt_color = _risk_type_color(_ins["risk_type"]) if _ins.get("risk_type") else "#2E7D32"
+                        _sel_h = _esc_html(sel_name)
+                        _pr2_c = _priority_color(_ins["priority"])
+                        _pr2_h = _esc_html(_ins["priority"])
+                        _rt_h = _esc_html(_ins["risk_type"] or "暂无明显风险")
+                        _tcn_c = _conclusion_color(_t["summary_symbol"])
+                        _tcn_h = _esc_html(_t["conclusion"])
+                        st.markdown(
+                            f"**{_sel_h}** ｜ "
+                            f"<span style='background:{_pr2_c};color:#fff;border-radius:3px;padding:1px 6px;font-size:12px;'>{_pr2_h}</span> "
+                            f"<span style='color:#555;font-size:13px;'>风险分{_ins['risk_score']}</span> ｜ "
+                            f"<span style='color:{_rt_color};font-weight:600;font-size:13px;'>{_ins['risk_icon']}{_rt_h}</span> ｜ "
+                            f"<span style='color:{_tcn_c};font-size:13px;'>近期趋势：{_t['summary_symbol']} {_tcn_h}</span>",
+                            unsafe_allow_html=True)
+                        st.caption(f"5维指标：{_ins['metrics_brief']} ｜ 异常汇总：{_ins['anomalies_brief']}")
+
+                        if _ins["inconsistency"].get("inconsistent"):
+                            st.info(f"⚖️ **数据与风险不一致**：{_ins['inconsistency']['message']}")
+
+                        st.markdown("**📈 5维近期趋势**")
+                        _dim_rows = [
+                            {"维度": _d, "趋势": f"{_td['symbol']} {_td['trend']}", "数据对比": _td["detail"]}
+                            for _d, _td in _t["dims"].items()
+                        ]
+                        st.dataframe(pd.DataFrame(_dim_rows), use_container_width=True, hide_index=True)
+
+                        st.markdown(f"**🔎 问题讲次（共{_ins['problem_count']}项异常）**")
+                        if _ins["problem_lectures"]:
+                            _pl_lines = []
+                            for _pl in _ins["problem_lectures"]:
+                                _issues = "、".join(f"{_iv['type']}（{_iv['data']}）" for _iv in _pl["issues"])
+                                _title = f"《{_esc_html(_pl['title'])}》" if _pl.get("title") else ""
+                                _pl_lines.append(
+                                    f"<div style='padding:4px 0;border-bottom:1px dashed #eee;font-size:13px;color:#333;'>"
+                                    f"<b>{_esc_html(_pl['lecture'])}</b>{_title} ｜ {_esc_html(_issues)}</div>")
+                            st.markdown("".join(_pl_lines), unsafe_allow_html=True)
+                        else:
+                            st.success("暂无问题讲次，继续保持。")
+
+                        _ai_i = ai_map.get(sel_name)
+                        _data_i = _ai_i if _ai_i else _ins["rule_insight"]
+                        _src_i = _ai_i.get("source", "rule") if _ai_i else "rule"
+                        _src_tag_i = "🤖 AI深度分析" if _src_i == "ai" else "⚙️ 规则分析（真实数据）"
+                        st.markdown(f"**🔍 该学员风险洞察**（{_src_tag_i}）")
+                        _tc_i = _risk_type_color(_data_i.get("主要风险", ""))
+                        _di_risk = _esc_html(_data_i.get("主要风险", ""))
+                        _di_trig = _esc_html(_data_i.get("触发指标", ""))
+                        _di_expl = _esc_html(_data_i.get("风险解释", ""))
+                        _di_foc = _esc_html(_data_i.get("建议关注", ""))
+                        st.markdown(f"""
+<div style="border:1px solid #e8eaf0;border-left:4px solid {_tc_i};border-radius:6px;padding:10px 14px;background:#fafafa;font-size:13px;line-height:1.8;">
+<div><b>主要风险：</b>{_di_risk}</div>
+<div><b>触发指标：</b>{_di_trig}</div>
+<div><b>风险解释：</b>{_di_expl}</div>
+<div><b>建议关注：</b>{_di_foc}</div>
+<div><b>趋势结论：</b>{_tcn_h}</div>
+</div>
+""", unsafe_allow_html=True)
+
+                    # ===== 7. 📄 AI学情风险报告（单个学员）=====
+                    st.subheader("📄 AI学情风险报告（单个学员）")
+                    st.caption("10模块报告：整体状态·5维指标·近期趋势·风险等级·风险类型·风险原因·问题讲次·已知事实🟢·待确认🟡·关注建议（全部基于真实数据，数据不足时明确提示）")
+                    rpt_name = st.selectbox("选择学员生成报告", [r["学员姓名"] for r in results], key="lec_rpt_student")
+                    if st.button("📄 生成AI学情风险报告", key="lec_rpt_gen", type="primary"):
+                        from core.ai_risk_insight import generate_risk_report
+                        _ri = insight_map.get(rpt_name)
+                        _rr = result_map.get(rpt_name)
+                        with st.spinner("AI正在生成学情风险报告（含10模块完整性校验，失败自动降级规则版）..."):
+                            _rpt = generate_risk_report(_ri, _rr)
+                        st.session_state["lec_rpt_content"] = _rpt
+                        st.session_state["lec_rpt_content_name"] = rpt_name
+                        st.rerun()
+
+                    if st.session_state.get("lec_rpt_content"):
+                        _rname = st.session_state.get("lec_rpt_content_name", "")
+                        _rpt = st.session_state["lec_rpt_content"]
+                        st.success(f"✅ AI学情风险报告已生成：{_rname}")
+                        st.text_area("报告内容", value=_rpt, height=380, key="lec_rpt_preview", label_visibility="collapsed")
+                        _safe_rn = re.sub(r'[\\/:*?"<>|]', '', _rname)
                         st.download_button(
-                            "📥 导出风险分析Excel",
-                            data=f,
-                            file_name=output_filename,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            use_container_width=True,
+                            "📥 下载报告（TXT）",
+                            data=_rpt.encode("utf-8"),
+                            file_name=f"AI学情风险报告_{_safe_rn}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+                            mime="text/plain",
+                            key="lec_rpt_dl",
                         )
-                    log_event("analysis_end", {"student_count": len(df), "duration_s": round(elapsed, 2)})
+
+                    # ===== 导出结果 =====
+                    st.subheader("导出结果")
+                    if st.session_state.get("lec_risk_export_path"):
+                        with open(st.session_state["lec_risk_export_path"], "rb") as f:
+                            st.download_button(
+                                "📥 导出风险分析Excel",
+                                data=f,
+                                file_name=st.session_state.get("lec_risk_export_filename", "风险分析.xlsx"),
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="lec_risk_dl_excel",
+                            )
 
             # ===== 批量报告生成 =====
             elif report_mode == "📄 批量报告生成":
