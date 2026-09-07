@@ -491,7 +491,7 @@ with tab2:
         max-width: 520px;
     ">
         <span style="color: #5c6bc0; font-size: 14px; font-weight: 500;">
-            💬 输入家长问题，AI自动判断家长真实诉求 → 明确沟通目标与成功标准 → 提取真实依据与踩雷提醒 → 生成话术 → 预判家长回应。
+            💬 输入家长问题，AI自动判断家长真实诉求 → 明确沟通目标与成功标准 → 提取真实依据与踩雷提醒 → 生成话术 → 预判家长回应 → 记录沟通结果，AI生成跟进计划并到期提醒。
         </span>
     </div>
     """, unsafe_allow_html=True)
@@ -636,32 +636,42 @@ with tab2:
     with col1:
         generate_btn = st.button("✨ 生成回复", type="primary", use_container_width=True)
 
-    if generate_btn and (question or uploaded_image):
+    # 结果存入session_state：记录沟通结果等交互触发重跑时，六段式输出不再消失
+    if (generate_btn and (question or uploaded_image)) or st.session_state.get("qa_last_result"):
         with st.spinner("正在分析问题并生成回复..."):
-            start_time = time.time()
             try:
-                from core.qa_responder import generate_qa_response
-                student_context = {}
-                if comm_type:
-                    if comm_type == "其他":
-                        student_context["沟通类型"] = st.session_state.get("qa_comm_type_other", "其他") or "其他"
-                    else:
-                        student_context["沟通类型"] = comm_type
-                if study_duration:
-                    student_context["在读时间"] = study_duration
-                if subject:
-                    student_context["科目"] = subject
-                if grade:
-                    student_context["年级"] = grade
-                # 读取截图数据
-                img_data = uploaded_image.getvalue() if uploaded_image else None
-                result = generate_qa_response(
-                    question or "",
-                    student_context=student_context if student_context else None,
-                    image_data=img_data
-                )
-                elapsed = time.time() - start_time
-                st.success(f"策略生成完成，耗时 {elapsed:.1f} 秒")
+                if generate_btn and (question or uploaded_image):
+                    start_time = time.time()
+                    from core.qa_responder import generate_qa_response
+                    student_context = {}
+                    if comm_type:
+                        if comm_type == "其他":
+                            student_context["沟通类型"] = st.session_state.get("qa_comm_type_other", "其他") or "其他"
+                        else:
+                            student_context["沟通类型"] = comm_type
+                    if study_duration:
+                        student_context["在读时间"] = study_duration
+                    if subject:
+                        student_context["科目"] = subject
+                    if grade:
+                        student_context["年级"] = grade
+                    # 读取截图数据
+                    img_data = uploaded_image.getvalue() if uploaded_image else None
+                    result = generate_qa_response(
+                        question or "",
+                        student_context=student_context if student_context else None,
+                        image_data=img_data
+                    )
+                    elapsed = time.time() - start_time
+                    st.session_state["qa_last_result"] = result
+                    st.session_state["qa_last_context"] = {
+                        "question": question or "",
+                        "student_context": student_context,
+                    }
+                    st.success(f"策略生成完成，耗时 {elapsed:.1f} 秒")
+                else:
+                    # 已有结果（交互控件触发重跑），直接复用，不重复调用AI
+                    result = st.session_state["qa_last_result"]
 
                 # ====== 一、问题判断（含AI诉求识别） ======
                 with st.expander("🔍 一、问题判断", expanded=True):
@@ -888,6 +898,80 @@ with tab2:
                         st.markdown("**📅 后续跟踪时间**")
                         st.success(actions.get("后续跟踪时间", "") or "暂无")
 
+                # ====== 七、记录本次沟通结果 & 跟进计划（沟通跟进中心入口） ======
+                try:
+                    from core.followup_engine import (
+                        COMM_RESULTS, generate_followup_plan, FollowupStore,
+                        new_task, build_analysis_summary, now_cn,
+                    )
+                    _last_ctx = st.session_state.get("qa_last_context", {}) or {}
+                    _fu_question = _last_ctx.get("question") or (question or "")
+                    with st.expander("📝 七、记录本次沟通结果 & 跟进计划", expanded=False):
+                        st.caption("沟通完成后记录结果，AI自动生成跟进计划并加入下方「我的跟进」，到期不再靠脑子记。")
+                        c_r1, c_r2 = st.columns(2)
+                        with c_r1:
+                            fu_name = st.text_input(
+                                "学员姓名", key="fu_student_name",
+                                placeholder="用于跟进中心显示（必填）")
+                        with c_r2:
+                            fu_result = st.selectbox(
+                                "本次沟通结果", COMM_RESULTS, key="fu_comm_result")
+                        fu_note = st.text_area(
+                            "备注（选填）", key="fu_note", height=60,
+                            placeholder="如：家长担心数学跟不上，约定周五晚8点电话；或记录拒绝原因")
+                        if st.button("✨ AI生成跟进计划", key="fu_gen_plan", type="primary"):
+                            if not fu_name.strip():
+                                st.warning("请先填写学员姓名")
+                            else:
+                                diag = result.get("问题判断", {}) or {}
+                                _summary = build_analysis_summary(result)
+                                with st.spinner("正在生成跟进计划..."):
+                                    _plan = generate_followup_plan(
+                                        fu_name.strip(), _fu_question, _summary,
+                                        (diag.get("沟通阶段") or "").strip(),
+                                        fu_result, fu_note)
+                                st.session_state["fu_pending_plan"] = {
+                                    "plan": _plan, "name": fu_name.strip(),
+                                    "question": _fu_question, "result": fu_result,
+                                    "note": fu_note, "stage": (diag.get("沟通阶段") or "").strip(),
+                                    "summary": _summary,
+                                }
+                        _pending = st.session_state.get("fu_pending_plan")
+                        if _pending:
+                            _p = _pending["plan"]
+                            _PRIO_COLOR = {"高": "#E53935", "中": "#F57C00", "低": "#43A047"}
+                            st.markdown(
+                                f"<div style='background:#F1F8E9;border:1px solid #AED581;border-radius:6px;"
+                                f"padding:10px 14px;margin:8px 0'>"
+                                f"<div style='font-size:0.95em;color:#33691E'><b>📅 建议跟进时间：{_p['followup_at'].strftime('%Y-%m-%d %H:%M')}</b>"
+                                f"　<span style='background:{_PRIO_COLOR.get(_p['priority'], '#607D8B')};color:white;"
+                                f"padding:1px 10px;border-radius:10px;font-size:0.8em'>优先级 {_p['priority']}</span></div>"
+                                f"<div style='color:#37474F;font-size:0.88em;margin-top:5px'>🎯 <b>本次跟进目标：</b>{_p['goal']}</div>"
+                                f"<div style='color:#37474F;font-size:0.88em'>👀 <b>下一次重点关注：</b>{_p['focus']}</div>"
+                                f"<div style='color:#37474F;font-size:0.88em'>⚠️ <b>跟进提醒：</b>{_p['reminder']}</div>"
+                                f"<div style='color:#78909C;font-size:0.8em;margin-top:4px'>⏱️ 时间依据：{_p['time_basis']}"
+                                + ("（规则兜底，可手动调整）" if _p.get("source") == "rule" else "")
+                                + "</div></div>", unsafe_allow_html=True)
+                            c_add, _ = st.columns([1, 2])
+                            with c_add:
+                                if st.button("➕ 加入跟进中心", key="fu_add_task", type="primary"):
+                                    try:
+                                        _store = FollowupStore()
+                                        _task = new_task(
+                                            _pending["name"], _pending["question"], _p,
+                                            _pending["result"], _pending["note"],
+                                            _pending["stage"], _pending["summary"])
+                                        _store.add(_task)
+                                        st.session_state["fu_pending_plan"] = None
+                                        st.success("✅ 已加入跟进中心，可在下方「📋 我的跟进」查看")
+                                    except Exception as ex:
+                                        st.error(f"加入跟进中心失败：{ex}")
+                            if st.button("🗑️ 放弃该计划", key="fu_drop_plan"):
+                                st.session_state["fu_pending_plan"] = None
+                                st.rerun()
+                except Exception as _fu_ex:
+                    st.error(f"跟进计划生成异常：{_fu_ex}")
+
             except Exception as e:
                 st.error(f"生成失败：{e}")
     elif generate_btn and not question and not uploaded_image:
@@ -901,6 +985,178 @@ with tab2:
             with st.expander(f"Q: {item['question'][:50]}..."):
                 st.markdown(f"**分类**: {item['classification'].get('category', '未知')}")
                 st.markdown(f"**回复**: {item['response']}")
+
+    # ============================================================
+    # 沟通跟进中心（围绕Tab2沟通场景的持续跟进，与Tab1风险中心独立）
+    # ============================================================
+    try:
+        import json as _json
+        from datetime import timedelta as _td
+        from core.followup_engine import (
+            COMM_RESULTS, generate_followup_plan, FollowupStore,
+            new_task, group_tasks, task_display_status, parse_task_time, now_cn,
+        )
+
+        _fu_store = FollowupStore()
+        _fu_all = _fu_store.load()
+        _fu_groups = group_tasks(_fu_all)
+        _n_today = len(_fu_groups["today"])
+        _n_up = len(_fu_groups["upcoming"])
+        _n_done = len(_fu_groups["done"])
+        _n_overdue = sum(1 for t in _fu_groups["today"] if task_display_status(t) == "已超时")
+
+        def _render_fu_task(t: dict, done: bool = False):
+            """渲染单条跟进任务卡片：学员｜问题｜时间｜优先级｜目标｜状态 + 操作"""
+            tid = t["id"]
+            name = t.get("student_name", "?")
+            q_short = (t.get("question") or "")[:18] or "（无问题记录）"
+            fu_dt = t.get("followup_at", "")
+            prio = t.get("priority", "中")
+            status = task_display_status(t)
+            _PRIO_BG = {"高": "#E53935", "中": "#F57C00", "低": "#43A047"}
+            _STATUS_BG = {"待跟进": "#1E88E5", "已超时": "#E53935", "已完成": "#607D8B"}
+            icon = "⏰" if status == "已超时" else ("✅" if done else "📌")
+            with st.expander(f"{icon} {name} ｜ {q_short} ｜ {fu_dt}"):
+                st.markdown(
+                    f"<div style='background:#FAFAFA;border:1px solid #E0E0E0;border-radius:6px;"
+                    f"padding:8px 12px;margin-bottom:8px'>"
+                    f"<span style='background:{_PRIO_BG.get(prio, '#607D8B')};color:white;padding:1px 10px;"
+                    f"border-radius:10px;font-size:0.8em'>优先级 {prio}</span> "
+                    f"<span style='background:{_STATUS_BG.get(status, '#607D8B')};color:white;padding:1px 10px;"
+                    f"border-radius:10px;font-size:0.8em'>{status}</span> "
+                    f"<span style='color:#90A4AE;font-size:0.8em'>沟通结果：{t.get('comm_result', '')}"
+                    f"｜创建于 {t.get('created_at', '')}</span>"
+                    f"<div style='color:#37474F;font-size:0.88em;margin-top:6px'>🎯 <b>跟进目标：</b>{t.get('goal', '')}</div>"
+                    f"<div style='color:#37474F;font-size:0.88em'>👀 <b>重点关注：</b>{t.get('focus', '')}</div>"
+                    f"<div style='color:#37474F;font-size:0.88em'>⚠️ <b>跟进提醒：</b>{t.get('reminder', '')}</div>"
+                    f"</div>", unsafe_allow_html=True)
+                if t.get("time_basis"):
+                    _src = "（规则兜底）" if t.get("plan_source") == "rule" else ""
+                    st.caption(f"⏱️ 时间依据：{t['time_basis']}{_src}")
+                hist = t.get("history") or []
+                if hist:
+                    st.markdown("**📜 沟通记录**")
+                    for h in hist[-5:]:
+                        st.markdown(
+                            f"<div style='border-left:2px solid #B0BEC5;padding:2px 8px;"
+                            f"color:#546E7A;font-size:0.82em;margin-bottom:2px'>"
+                            f"[{h.get('time', '')}] {h.get('result', '')}　{h.get('note', '')}</div>",
+                            unsafe_allow_html=True)
+                if t.get("delayed_count"):
+                    st.caption(f"已延后 {t['delayed_count']} 次")
+
+                if done:
+                    c_del, _ = st.columns([1, 3])
+                    with c_del:
+                        if st.button("🗑️ 删除记录", key=f"{tid}_del", use_container_width=True):
+                            _fu_store.delete(tid)
+                            st.rerun()
+                    return
+
+                c1, c2, c3 = st.columns([1, 1.4, 1])
+                with c1:
+                    if st.button("✅ 标记完成", key=f"{tid}_done", use_container_width=True):
+                        _fu_store.complete(tid)
+                        st.rerun()
+                with c2:
+                    _cur_dt = parse_task_time(t)
+                    _d = st.date_input("延后至", value=_cur_dt.date() + _td(days=1),
+                                       key=f"{tid}_ddate", label_visibility="collapsed")
+                    if st.button("⏰ 确认延后", key=f"{tid}_delay", use_container_width=True):
+                        _new_dt = datetime.combine(_d, _cur_dt.time())
+                        _fu_store.delay(tid, _new_dt)
+                        st.rerun()
+                with c3:
+                    if st.button("🗑️ 删除", key=f"{tid}_del2", use_container_width=True):
+                        _fu_store.delete(tid)
+                        st.rerun()
+
+                # 循环跟进：完成当前任务并生成下一次跟进
+                with st.expander("🔄 记录跟进结果 & 生成下一次跟进"):
+                    nres = st.selectbox("本次沟通结果", COMM_RESULTS, key=f"{tid}_nres")
+                    nnote = st.text_area("备注（选填）", key=f"{tid}_nnote", height=60)
+                    if st.button("✨ 生成跟进计划", key=f"{tid}_ngen"):
+                        with st.spinner("正在生成跟进计划..."):
+                            nplan = generate_followup_plan(
+                                name, t.get("question", ""), t.get("analysis_summary", ""),
+                                t.get("stage", ""), nres, nnote)
+                        st.session_state[f"{tid}_nplan"] = {"plan": nplan, "result": nres, "note": nnote}
+                    _np = st.session_state.get(f"{tid}_nplan")
+                    if _np:
+                        _np_plan = _np["plan"]
+                        _PC = {"高": "#E53935", "中": "#F57C00", "低": "#43A047"}
+                        st.markdown(
+                            f"<div style='background:#F1F8E9;border:1px solid #AED581;border-radius:6px;"
+                            f"padding:10px 14px;margin:8px 0'>"
+                            f"<div style='font-size:0.95em;color:#33691E'><b>📅 下次跟进：{_np_plan['followup_at'].strftime('%Y-%m-%d %H:%M')}</b>"
+                            f"　<span style='background:{_PC.get(_np_plan['priority'], '#607D8B')};color:white;"
+                            f"padding:1px 10px;border-radius:10px;font-size:0.8em'>优先级 {_np_plan['priority']}</span></div>"
+                            f"<div style='color:#37474F;font-size:0.88em;margin-top:5px'>🎯 <b>跟进目标：</b>{_np_plan['goal']}</div>"
+                            f"<div style='color:#37474F;font-size:0.88em'>👀 <b>重点关注：</b>{_np_plan['focus']}</div>"
+                            f"<div style='color:#37474F;font-size:0.88em'>⚠️ <b>跟进提醒：</b>{_np_plan['reminder']}</div>"
+                            f"</div>", unsafe_allow_html=True)
+                        if st.button("➕ 完成当前任务并加入新跟进", key=f"{tid}_nadd", type="primary"):
+                            _rec = {"time": now_cn().strftime("%Y-%m-%d %H:%M"),
+                                    "result": _np["result"], "note": _np["note"] or "（无备注）"}
+                            _new_task = new_task(
+                                name, t.get("question", ""), _np_plan, _np["result"],
+                                _np["note"], t.get("stage", ""), t.get("analysis_summary", ""))
+                            _fu_store.complete(tid, _rec)
+                            _fu_store.add(_new_task)
+                            st.session_state[f"{tid}_nplan"] = None
+                            st.rerun()
+
+        _fu_title = f"📋 我的跟进（今日待跟进 {_n_today} · 即将 {_n_up} · 已完成 {_n_done}）"
+        if _n_overdue:
+            _fu_title += f" ⚠️ {_n_overdue} 条已超时"
+        with st.expander(_fu_title, expanded=_n_overdue > 0):
+            if not _fu_all:
+                st.caption("暂无跟进任务。在上方生成沟通策略后，于「七、记录本次沟通结果」中记录结果即可自动创建跟进任务。")
+            else:
+                _ft1, _ft2, _ft3 = st.tabs([
+                    f"🔴 今日待跟进（{_n_today}）",
+                    f"🟡 即将跟进（{_n_up}）",
+                    f"🔵 已完成（{_n_done}）",
+                ])
+                with _ft1:
+                    if not _fu_groups["today"]:
+                        st.caption("今天没有待跟进任务 🎉")
+                    for _t in _fu_groups["today"]:
+                        _render_fu_task(_t)
+                with _ft2:
+                    if not _fu_groups["upcoming"]:
+                        st.caption("暂无即将跟进的任务")
+                    for _t in _fu_groups["upcoming"]:
+                        _render_fu_task(_t)
+                with _ft3:
+                    if not _fu_groups["done"]:
+                        st.caption("暂无已完成记录")
+                    for _t in _fu_groups["done"][:20]:
+                        _render_fu_task(_t, done=True)
+                    if len(_fu_groups["done"]) > 20:
+                        st.caption(f"仅显示最近20条，共 {len(_fu_groups['done'])} 条")
+            # 备份/恢复（云端重新部署后数据会清空，导入备份可恢复）
+            with st.expander("⚙️ 备份 / 恢复"):
+                st.caption("云端应用重新部署后跟进数据会清空，建议定期导出备份。")
+                st.download_button(
+                    "📤 导出全部跟进数据",
+                    data=_fu_store.export_data(),
+                    file_name=f"跟进备份_{now_cn().strftime('%Y%m%d_%H%M')}.json",
+                    mime="application/json", key="fu_export")
+                _fu_up = st.file_uploader("📥 导入备份JSON（按任务ID去重合并）", type=["json"], key="fu_import")
+                if _fu_up is not None:
+                    try:
+                        _imported = _json.loads(_fu_up.getvalue().decode("utf-8"))
+                        _added = _fu_store.import_merge(_imported if isinstance(_imported, list) else [])
+                        if _added:
+                            st.success(f"导入完成，新增 {_added} 条（重复任务自动跳过）")
+                            st.rerun()
+                        else:
+                            st.info("导入完成，没有新增任务（全部为重复任务）")
+                    except Exception as _imp_ex:
+                        st.error(f"导入失败：{_imp_ex}")
+    except Exception as _fu_center_ex:
+        st.error(f"跟进中心加载异常：{_fu_center_ex}")
 
     with st.expander("💡 支持的问题类型"):
         st.markdown("""
