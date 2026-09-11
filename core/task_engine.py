@@ -626,6 +626,12 @@ def complete_task(tasks: list, task_id: str, comm_result: str, teacher_note: str
     entry = {"时间": now, "结果": comm_result}
     if teacher_note:
         entry["备注"] = teacher_note
+        # AI自动理解老师输入的家长反馈（结构化提取：态度/问题/风险/动作，零大模型调用）
+        try:
+            from core.feedback_parser import parse_parent_feedback
+            entry["AI理解"] = parse_parent_feedback(teacher_note)
+        except Exception as e:
+            print(f"[feedback] AI理解家长反馈失败(不影响主流程): {e}")
     t["沟通结果历史"].append(entry)
     t["时间线"].append({
         "时间": now, "事件": "老师完成沟通",

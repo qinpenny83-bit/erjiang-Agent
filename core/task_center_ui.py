@@ -285,6 +285,14 @@ def _render_task_card(t: dict, idx: int, students_by_name: dict, is_demo: bool, 
                 for r in t["沟通结果历史"]:
                     note = f" ｜ 备注：{r['备注']}" if r.get("备注") else ""
                     st.markdown(f"- **{r['时间']}** — {r['结果']}{note}")
+                    if r.get("AI理解"):
+                        ai = r["AI理解"]
+                        st.markdown(
+                            "<span style='color:#6A1B9A;font-size:0.8em'>🤖 AI理解老师反馈：</span>"
+                            f"家长态度「{ai.get('家长态度','未明确')}」｜问题「{ai.get('当前问题','未明确')}」"
+                            f"｜风险{ai.get('风险是否解除','未明确')}｜改善可能「{ai.get('改善可能性','未明确')}」"
+                            f"｜下一步「{ai.get('下一动作','未明确')}」",
+                            unsafe_allow_html=True)
 
         # --- AI复评结果（第二阶段：AI动态复评展示） ---
         r = t.get("AI复评结果")

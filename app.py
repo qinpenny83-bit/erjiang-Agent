@@ -18,12 +18,20 @@ st.set_page_config(page_title="二讲智能服务效能增长Agent", layout="wid
 st.title("🥇二讲智能服务效能增长Agent")
 st.caption("AI驱动学情洞察、家校沟通与学员运营，提升服务效能，促进续费增长")
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab_home, tab1, tab2, tab3, tab4 = st.tabs([
+    "🏠 AI服务驾驶舱",
     "📊 学情续费预警系统",
     "💬 家校沟通策略助手",
     "📋 风险优先处理中心",
     "📈 数据看板"
 ])
+
+# ============================================================
+# Tab 0: AI服务驾驶舱（默认首页 · 老板视角 / AI决策中枢）
+# ============================================================
+with tab_home:
+    from core.agent_dashboard_ui import render_dashboard
+    render_dashboard()
 
 # ============================================================
 # Tab 1: 学情续费预警系统
