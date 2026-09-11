@@ -119,3 +119,99 @@ def build_funnel(analysis_result: dict, tasks: list = None, decisions: list = No
         ("待观察", stats["持续观察"], "#EF6C00"),
         ("风险缓解", stats["风险已缓解"], "#1565C0"),
     ]
+
+
+# ============================================================
+# AI资源决策 / 服务效果 / 服务复盘（本次升级新增，纯增量）
+# ============================================================
+
+def compute_resource_allocation(analysis_result: dict, tasks: list = None,
+                                decisions: list = None) -> dict:
+    """AI资源决策：把全体学员分为「重点人工介入/轻量触达/持续观察/AI自动管理」四类。"""
+    from core.resource_allocation import allocate_resources
+    return allocate_resources(analysis_result, tasks, decisions)
+
+
+def compute_service_effect(records: dict, tasks: list = None) -> dict:
+    """AI服务效果：基于真实跟进记录计算若干可直接统计的效果指标。
+
+    无数据可支撑的指标返回字符串「待积累数据」，不虚构数值。
+    """
+    from core.service_memory import evaluate_service_effect
+
+    records = records or {}
+    fu = {k: v for k, v in records.items() if isinstance(v, dict) and (v.get("history") or [])}
+    n_fu = len(fu)
+
+    effects = {k: evaluate_service_effect(v) for k, v in fu.items()}
+    relieved = sum(1 for e in effects.values() if e["效果"] == "有效")
+    improved = sum(1 for e in effects.values() if e["效果"] in ("有效", "有限"))
+    repeated = sum(1 for v in fu.values() if len(v.get("history") or []) >= 2)
+    escalated = sum(1 for e in effects.values() if e["效果"] == "无效")
+
+    def _rate(numer):
+        return round(numer / n_fu, 3) if n_fu else "待积累数据"
+
+    # 任务及时处理率（来自 task_engine，与跟进记录独立）
+    tasks = tasks or []
+    done = sum(1 for t in tasks if t.get("任务状态") == "已完成")
+    overdue = sum(1 for t in tasks if t.get("任务状态") == "已超时")
+    ontime = done / (done + overdue) if (done + overdue) else "待积累数据"
+    if ontime != "待积累数据":
+        ontime = round(ontime, 3)
+
+    return {
+        "已跟进人数": n_fu,
+        "风险缓解率": _rate(relieved),
+        "跟进后改善率": _rate(improved),
+        "重复跟进率": _rate(repeated),
+        "风险升级率": _rate(escalated),
+        "任务及时处理率": ontime,
+    }
+
+
+def compute_service_review(records: dict, students: list, tasks: list = None,
+                           decisions: list = None) -> dict:
+    """AI服务复盘：本周（本批数据）发现/观察/介入/改善/升级/无明显变化的运营总账，
+    以及「哪类策略效果最好/哪类风险最适合观察」等结论（样本不足则如实标注）。"""
+    from core.service_memory import build_strategy_memory, evaluate_service_effect
+
+    students = students or []
+    decisions = decisions or []
+    records = records or {}
+
+    risky = [s for s in students if str(s.get("分层")) in ("P1", "P2", "P3")]
+    students_by_name = {s.get("学生姓名"): s for s in students}
+
+    # 分桶统计
+    auto = sum(1 for d in decisions if d.get("决策档位") in ("持续观察", "AI自动跟踪"))
+    manual = sum(1 for d in decisions if d.get("决策档位") in ("立即处理", "今日处理"))
+
+    fu = {k: v for k, v in records.items() if isinstance(v, dict) and (v.get("history") or [])}
+    effects = {k: evaluate_service_effect(v) for k, v in fu.items()}
+    improved = sum(1 for e in effects.values() if e["效果"] == "有效")
+    escalated = sum(1 for e in effects.values() if e["效果"] == "无效")
+    flat = sum(1 for e in effects.values() if e["效果"] == "有限")
+
+    # 策略记忆 → 结论（样本不足时只给「数据积累中」）
+    memory = build_strategy_memory(records, students_by_name)
+    best_by_cat = memory.get("最佳策略建议") or {}
+    insights = []
+    if best_by_cat:
+        for cat, r in best_by_cat.items():
+            insights.append(
+                f"「{cat}」样本中，{r['策略']} 有效占比最高（{r['次数']}次，有效{int(r['有效占比']*100)}%），可优先推荐")
+    else:
+        insights.append("策略效果记忆样本不足，数据积累中，暂不输出分类结论")
+
+    return {
+        "发现风险": len(risky),
+        "AI自动观察": auto,
+        "人工介入": manual,
+        "风险改善": improved,
+        "风险升级": escalated,
+        "无明显变化": flat,
+        "已跟进人数": len(fu),
+        "策略洞察": insights,
+        "样本状态": memory.get("整体样本状态", "样本积累中"),
+    }

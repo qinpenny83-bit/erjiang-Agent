@@ -19,9 +19,11 @@ from config import TIER_COLORS
 try:
     from core import agent_decision as ad
     from core import agent_dashboard as dashboard
+    from core.risk_followup_center import RiskFollowupStore
     from utils.task_store import load_tasks
 except Exception:  # pragma: no cover
     ad = dashboard = load_tasks = None
+    RiskFollowupStore = None
 
 
 # ============================================================
@@ -91,11 +93,14 @@ def _render():
     stats = dashboard.compute_agent_stats(analysis_result, tasks, decisions)
 
     _overview(stats, analysis_result)
+    _resource_allocation(analysis_result, tasks, decisions)
     _ai_actions_checklist(stats)
     _automation_rates(stats)
     _boss_metrics(stats)
+    _service_effect(tasks)
     _funnel(stats, tasks)
     _today_tasks(decisions)
+    _service_review(analysis_result, tasks, decisions)
 
 
 # ============================================================
@@ -194,6 +199,87 @@ def _boss_metrics(stats):
             "AI筛出需人的关键问题占比", "#F3E5F5", "#E1BEE7", "#6A1B9A"), unsafe_allow_html=True)
 
 
+def _load_records():
+    """加载 Tab3 风险跟进记录（用于效果评估与策略记忆，安全兜底为空）。"""
+    try:
+        return RiskFollowupStore().load() if RiskFollowupStore else {}
+    except Exception:
+        return {}
+
+
+def _fmt_rate(v):
+    return f"{v:.1%}" if isinstance(v, (int, float)) else v
+
+
+def _iv_color(level):
+    return {"高": "#C62828", "中": "#EF6C00", "低": "#2E7D32"}.get(level, "#888")
+
+
+def _resource_allocation(analysis_result, tasks, decisions):
+    st.markdown("### 🎯 AI资源决策")
+    alloc = dashboard.compute_resource_allocation(analysis_result, tasks, decisions)
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(_metric_card("🔴 重点人工介入", f"{alloc['重点人工介入']}人",
+            "今日真正需要处理", "#FFEAEA", "#FFCDD2", "#C62828"), unsafe_allow_html=True)
+    with c2:
+        st.markdown(_metric_card("💬 轻量触达", f"{alloc['轻量触达']}人",
+            "低频/微信触达", "#FFF3E0", "#FFE0B2", "#EF6C00"), unsafe_allow_html=True)
+    with c3:
+        st.markdown(_metric_card("🟠 持续观察", f"{alloc['持续观察']}人",
+            "AI自动复查", "#FFF8E1", "#FFE082", "#F9A825"), unsafe_allow_html=True)
+    with c4:
+        st.markdown(_metric_card("🟢 AI自动管理", f"{alloc['AI自动管理']}人",
+            "无需人工介入", "#E8F5E9", "#A5D6A7", "#2E7D32"), unsafe_allow_html=True)
+
+    top = alloc.get("建议优先投入") or []
+    est = alloc.get("人工投入估算") or {}
+    if top:
+        st.markdown(f"**👩‍🏫 建议优先投入**：{'、'.join(top)}")
+    st.caption(f"⏱ 今日预计人工投入：约 {est.get('小时', 0)} 小时（{est.get('说明', '')}）")
+
+
+def _service_effect(tasks):
+    st.markdown("### 📈 AI服务效果")
+    eff = dashboard.compute_service_effect(_load_records(), tasks)
+    metrics = [
+        ("风险缓解率", eff["风险缓解率"]),
+        ("跟进后改善率", eff["跟进后改善率"]),
+        ("任务及时处理率", eff["任务及时处理率"]),
+        ("重复跟进率", eff["重复跟进率"]),
+        ("风险升级率", eff["风险升级率"]),
+    ]
+    cols = st.columns(len(metrics))
+    for col, (label, val) in zip(cols, metrics):
+        with col:
+            st.markdown(_metric_card(label, _fmt_rate(val),
+                f"已跟进 {eff['已跟进人数']} 人", "#F5F7FF", "#D7DFFF", "#1a237e"),
+                unsafe_allow_html=True)
+    st.caption("指标均基于真实跟进记录计算；无数据项显示「待积累数据」，不虚构数值。")
+
+
+def _service_review(analysis_result, tasks, decisions):
+    st.markdown("### 🧠 AI服务复盘")
+    students = (analysis_result or {}).get("students", [])
+    review = dashboard.compute_service_review(_load_records(), students, tasks, decisions)
+    items = [
+        ("发现风险", review["发现风险"], "#C62828"),
+        ("AI自动观察", review["AI自动观察"], "#F9A825"),
+        ("人工介入", review["人工介入"], "#EF6C00"),
+        ("风险改善", review["风险改善"], "#2E7D32"),
+        ("风险升级", review["风险升级"], "#C62828"),
+        ("无明显变化", review["无明显变化"], "#9E9E9E"),
+    ]
+    cols = st.columns(len(items))
+    for col, (label, num, color) in zip(cols, items):
+        with col:
+            st.markdown(_metric_card(label, f"{num}人", "真实数据", "#F5F7FF", "#D7DFFF", color),
+                        unsafe_allow_html=True)
+    st.markdown(f"**🔬 策略洞察**（样本状态：{review.get('样本状态', '')}）")
+    for line in (review.get("策略洞察") or []):
+        st.caption("· " + line)
+
+
 def _funnel(stats, tasks):
     st.markdown("### 🔁 今日风险处理漏斗")
     contacted = sum(1 for t in tasks if t.get("沟通结果历史"))
@@ -256,11 +342,29 @@ def _render_task_card(d, expanded_default):
         st.markdown(f"**🎯 AI建议**：{action}")
         if d.get("复查时间"):
             st.markdown(f"**⏰ 复查时间**：{d['复查时间']} ｜ **自动化分类**：{d['自动化分类']}")
+        iv = d.get("干预价值")
+        if isinstance(iv, (int, float)):
+            iv_level = d.get('干预价值等级', '')
+            iv_badge = _badge(f"{iv_level}·{int(iv)}分", _iv_color(iv_level))
+            st.markdown(f"**🎯 AI干预价值**：{iv_badge}", unsafe_allow_html=True)
+        strat = d.get("服务策略") or {}
+        if strat.get("推荐策略"):
+            st.markdown(f"**{strat.get('策略图标', '👀')} 推荐策略**：{strat['推荐策略']}"
+                        f"｜预计检查：{strat.get('预计检查', '持续监测')}")
+            for r in (strat.get("推荐原因") or []):
+                st.markdown(f"　· {r}")
         reasons = d.get("判断依据") or []
         if reasons:
             st.markdown("**💡 AI判断依据**（基于真实数据）")
             for r in reasons:
                 st.markdown(f"- {r}")
+        reason = d.get("决策理由") or {}
+        if reason and reason.get("为什么TA"):
+            with st.expander("🔎 为什么是TA？AI决策理由", expanded=False):
+                for label in ("为什么TA", "为什么现在", "为什么这种方式", "为什么不是别人"):
+                    parts = reason.get(label) or []
+                    if parts:
+                        st.markdown(f"**{label}**：" + "；".join(parts))
         if d.get("风险触发"):
             st.caption("风险触发：" + "、".join(str(x) for x in d["风险触发"][:4]))
         st.caption("前往「📊 学情续费预警系统」或「📋 风险优先处理中心」执行跟进与记录。")

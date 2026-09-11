@@ -180,18 +180,38 @@ def _mk(name, tier, level, need_contact, priority, action, risk_state, review_ti
 
 
 # ============================================================
+# 决策增强：干预价值 + 服务策略（增量层，不改变原有决策档位）
+# ============================================================
+
+def _enrich_decision(student: dict, task: dict, d: dict) -> dict:
+    """在决策档位之上叠加「AI干预价值 + 服务策略」，纯增量、不改变 decide_contact 结果。"""
+    try:
+        from core.intervention_value import compute_intervention_value
+        iv = compute_intervention_value(student, task)
+        d["干预价值"] = iv["价值分"]
+        d["干预价值等级"] = iv["价值等级"]
+        d["干预价值依据"] = iv["依据"]
+
+        from core.service_strategy import choose_strategy
+        d["服务策略"] = choose_strategy(student, task, iv, d)
+    except Exception as e:  # 增强失败不影响主决策
+        print(f"[决策中枢] 干预价值/策略增强失败: {e}")
+    return d
+
+
+# ============================================================
 # 今日AI任务：对所有学员做决策并分桶
 # ============================================================
 
 def build_agent_tasks(analysis_result: dict, tasks: list = None) -> list:
     """遍历全部学员，生成「今日AI任务」决策集，按决策档位排序。
 
-    返回按关键程度排序的决策列表（每个元素即 decide_contact 输出 + 学员原始信息增量）。
+    每个决策元素 = decide_contact 输出 + 学员原始信息增量 + 干预价值 + 服务策略 + 决策理由。
     """
     students = (analysis_result or {}).get("students", [])
     task_by_name = {t.get("学生姓名"): t for t in (tasks or []) if t.get("学生姓名")}
 
-    decisions = []
+    raw = []
     for s in students:
         t = task_by_name.get(s.get("学生姓名"))
         d = decide_contact(s, t)
@@ -201,6 +221,21 @@ def build_agent_tasks(analysis_result: dict, tasks: list = None) -> list:
         d["最近成绩"] = s.get("最近成绩")
         d["家长态度"] = s.get("家长态度")
         d["任务状态"] = t.get("任务状态") if t else ""
+        d = _enrich_decision(s, t, d)
+        raw.append((s, t, d))
+
+    # 第二遍：为每个决策补上「AI决策理由」（需知道 AI自动管理 人数）
+    auto_count = sum(1 for _, _, x in raw if x.get("决策档位") == LEVEL_GREEN)
+    decisions = []
+    for s, t, d in raw:
+        try:
+            from core.service_strategy import build_decision_reason
+            d["决策理由"] = build_decision_reason(
+                s, t, d, d.get("服务策略"),
+                {"价值分": d.get("干预价值"), "价值等级": d.get("干预价值等级")},
+                auto_count=auto_count)
+        except Exception as e:
+            print(f"[决策中枢] 决策理由生成失败: {e}")
         decisions.append(d)
 
     # 排序：立即处理 > 今日处理 > 持续观察 > AI自动跟踪；同级内风险分降序
